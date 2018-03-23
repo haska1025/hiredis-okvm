@@ -1,0 +1,12 @@
+Template: packagename/something
+Type: [select,multiselect,string,boolean,note,text,password]
+Default: [an optional default value]
+Description: Input something here?
+ When condition a, input some value, other wise the value ...
+
+Template: packagename/something
+Type: [select,multiselect,string,boolean,note,text,password]
+Default: [an optional default value]
+Description: Input something here?
+ When condition a, input some value, other wise the value ...
+

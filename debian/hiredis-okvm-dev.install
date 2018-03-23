@@ -1,0 +1,6 @@
+tang/lib/lib*.a
+tang/lib/lib*.so
+tang/lib/*.la
+tang/include/*
+tang/lib/pkgconfig/*
+tang/include/hiredis_okvm/*

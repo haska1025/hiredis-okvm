@@ -1,0 +1,33 @@
+Source: hiredis-okvm
+Priority: extra
+Maintainer: root <root@ubuntu>
+Build-Depends: cdbs, debhelper (>= 8.0.0), autotools-dev
+Standards-Version: 3.9.4
+Section: unknown
+
+Package: hiredis-okvm
+Section: unknown
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: <insert up to 60 chars description>
+ <insert long description, indented with spaces>
+
+Package: hiredis-okvm-dbg
+Section: devel
+Architecture: any
+Depends: hiredis-okvm (= ${Source-Version})
+Description: Debug symbol files for hiredis-okvm
+ <insert long description, indented with spaces>
+
+#Package: hiredis-okvm-doc
+#Section: document
+#Architecture: any
+#Description: Documentation for hiredis-okvm
+# <insert long description, indented with spaces>
+
+#Package: hiredis-okvm-dev
+#Section: devel
+#Architecture: any
+#Depends: hiredis-okvm (= ${Source-Version})
+#Description: Develop package for hiredis-okvm
+# <insert long description, indented with spaces>
