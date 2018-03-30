@@ -12,6 +12,7 @@ struct hiredis_okvm g_okvm;
 int g_loglevel = LOG_INFO;
 static struct hiredis_okvm_thread **g_okvm_threads = NULL;
 
+
 int hiredis_okvm_init(struct hiredis_okvm *param)
 {
     int rc = 0;

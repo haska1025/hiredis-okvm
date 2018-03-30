@@ -7,12 +7,10 @@
 #include "hiredis_okvm_thread.h"
 #include "hiredis_okvm_log.h"
 #include "hiredis_okvm.h"
-#include "queue.h"
 
 extern struct hiredis_okvm g_okvm;
 
 #define DEFAULT_CMD_LEN 512
-
 
 int hiredis_okvm_msg_queue_init(struct hiredis_okvm_msg_queue *queue)
 {
@@ -184,8 +182,31 @@ static void hiredis_okvm_thread_async_cb(uv_async_t* handle)
     uv_stop(&okvm_thr->loop);
 }
 
+static void hiredis_okvm_thread_inner_async_cb(uv_async_t *handle)
+{
+    struct hiredis_okvm_thread *okvm_thr = (struct hiredis_okvm_thread*)handle->data;
+    struct hiredis_okvm_msg *msg = NULL;
+
+    while(1){
+        msg = hiredis_okvm_msg_queue_pop(&okvm_thr->inner_queue); 
+        if (!msg){
+            HIREDIS_OKVM_LOG_INFO
+        }
+    }
+}
+
+static void hiredis_okvm_thread_read_async_cb(uv_async_t *handle)
+{
+    struct hiredis_okvm_thread *okvm_thr = (struct hiredis_okvm_thread*)handle->data;
+}
+
+static void hiredis_okvm_thread_write_async_cb(uv_async_t *handle)
+{
+    struct hiredis_okvm_thread *okvm_thr = (struct hiredis_okvm_thread*)handle->data;
+}
 static void hiredis_okvm_thr_svc(void *arg)
 {
+    uv_async_t *notify = NULL;
     struct hiredis_okvm_thread *okvm_thr = (struct hiredis_okvm_thread*)arg;
 
     HIREDIS_OKVM_LOG_INFO("Enter the okvm thread(%p)", arg);
@@ -200,6 +221,28 @@ static void hiredis_okvm_thr_svc(void *arg)
         return;
     }
     okvm_thr->notify.data = arg;
+
+    // Register inner message queue
+    notify = hiredis_okvm_msg_queue_get_notify(&okvm_thr->inner_queue);
+    notify->data = arg;
+    if (0 != uv_async_init(&okvm_thr->loop, notify, hiredis_okvm_thread_inner_async_cb)){
+        HIREDIS_OKVM_LOG_ERROR("Start worker thread. init inner async failed");
+        return;
+    }
+    // Register read message queue
+    notify = hiredis_okvm_msg_queue_get_notify(&okvm_thr->read_queue);
+    notify->data = arg;
+    if (0 != uv_async_init(&okvm_thr->loop, notify, hiredis_okvm_thread_read_async_cb)){
+        HIREDIS_OKVM_LOG_ERROR("Start worker thread. init read async failed");
+        return;
+    }
+    // Register write message queue
+    notify = hiredis_okvm_msg_queue_get_notify(&okvm_thr->write_queue);
+    notify->data = arg;
+    if (0 != uv_async_init(&okvm_thr->loop, notify, hiredis_okvm_thread_write_async_cb)){
+        HIREDIS_OKVM_LOG_ERROR("Start worker thread. init inner async failed");
+        return;
+    }
 
     uv_mutex_lock(&okvm_thr->state_mutex);
     okvm_thr->state = 1;
@@ -252,6 +295,46 @@ int hiredis_okvm_thread_stop(struct hiredis_okvm_thread *okvm_thr)
     uv_mutex_unlock(&okvm_thr->state_mutex);
     uv_async_send(&okvm_thr->notify);
     uv_thread_join(&okvm_thr->worker);
+    return 0;
+}
+
+int hiredis_okvm_thread_push(struct hiredis_okvm_thread *okvm_thr, struct hiredis_okvm_msg *msg)
+{
+    if (msg->type == HIREDIS_OKVM_MSG_READ){
+        return hiredis_okvm_msg_queue_push(&okvm_thr->read_queue, msg);
+    }else if (msg->type == HIREDIS_OKVM_MSG_WRITE){
+        return hiredis_okvm_msg_queue_push(&okvm_thr->write_queue, msg);
+    }else{
+        return hiredis_okvm_msg_queue_push(&okvm_thr->inner_queue, msg);
+    }
+}
+
+int hiredis_okvm_thread_pool_init(struct hiredis_okvm_thread_pool *thr_pool)
+{
+    QUEUE_INIT(&thr_pool->thr_head);
+    thr_pool->cur_thr = NULL;
+    uv_mutex_init(&thr_pool->mutex);
+    return 0;
+}
+int hiredis_okvm_thread_pool_push(struct hiredis_okvm_thread_pool *thr_pool, struct hiredis_okvm_msg *msg)
+{
+    struct hiredis_okvm_thread *thr = NULL;
+    QUEUE *thr_ptr = NULL;
+
+    uv_mutex_lock(&thr_pool->mutex);
+    if (thr_pool->cur_thr){
+        thr_pool->cur_thr = QUEUE_NEXT(thr_pool->cur_thr);
+    }else{
+        thr_pool->cur_thr = QUEUE_HEAD(&thr_pool->thr_head);
+    }
+    thr_ptr = thr_pool->cur_thr;
+    uv_mutex_unlock(&thr_pool->mutex);
+
+    thr = QUEUE_DATA(thr_ptr, struct hiredis_okvm_thread, link);
+    return hiredis_okvm_thread_push(thr, msg);
+}
+int hiredis_okvm_thread_pool_fini(struct hiredis_okvm_thread_pool *thr_pool)
+{
     return 0;
 }
 
