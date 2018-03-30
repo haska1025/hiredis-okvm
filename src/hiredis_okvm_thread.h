@@ -74,7 +74,6 @@ struct hiredis_okvm_thread
     uv_thread_t worker;
     uv_mutex_t state_mutex;
     uv_cond_t state_cond;
-    uv_async_t notify;
     int state;
 };
 

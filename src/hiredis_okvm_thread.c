@@ -174,14 +174,16 @@ static int hiredis_okvm_thread_get_replicas(struct hiredis_okvm_thread *okvm,
     return rc;
 }
 
-static void hiredis_okvm_thread_async_cb(uv_async_t* handle)
+static void hiredis_okvm_thread_process_inner_msg(struct hiredis_okvm_thread *okvm_thr, struct hiredis_okvm_msg *msg)
 {
-    // Do nothing
-    struct hiredis_okvm_thread *okvm_thr = (struct hiredis_okvm_thread*)handle->data;
-    okvm_thr->state = 0;
-    uv_stop(&okvm_thr->loop);
+    if (msg->type == OKVM_INNER_CMD_STOP){
+        okvm_thr->state = 0;
+        uv_stop(&okvm_thr->loop);
+    } else if (msg->type == OKVM_INNER_CMD_CONNECT_SLAVE){
+    } else if (msg->type == OKVM_INNER_CMD_CONNECT_MASTER){
+    } else if (msg->type == OKVM_INNER_CMD_CONNECT_SENTINEL){
+    }
 }
-
 static void hiredis_okvm_thread_inner_async_cb(uv_async_t *handle)
 {
     struct hiredis_okvm_thread *okvm_thr = (struct hiredis_okvm_thread*)handle->data;
@@ -190,8 +192,9 @@ static void hiredis_okvm_thread_inner_async_cb(uv_async_t *handle)
     while(1){
         msg = hiredis_okvm_msg_queue_pop(&okvm_thr->inner_queue); 
         if (!msg){
-            HIREDIS_OKVM_LOG_INFO
+            break;
         }
+        hiredis_okvm_thread_process_inner_msg(okvm_thr, msg);
     }
 }
 
@@ -215,13 +218,6 @@ static void hiredis_okvm_thr_svc(void *arg)
         HIREDIS_OKVM_LOG_ERROR("Start worker thread failed");
         return;
     }
-
-    if (0 != uv_async_init(&okvm_thr->loop, &okvm_thr->notify, hiredis_okvm_thread_async_cb)){
-        HIREDIS_OKVM_LOG_ERROR("Start worker thread. init async failed");
-        return;
-    }
-    okvm_thr->notify.data = arg;
-
     // Register inner message queue
     notify = hiredis_okvm_msg_queue_get_notify(&okvm_thr->inner_queue);
     notify->data = arg;
