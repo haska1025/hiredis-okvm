@@ -13,6 +13,36 @@ extern struct hiredis_okvm g_okvm;
 
 #define DEFAULT_CMD_LEN 512
 
+
+int hiredis_okvm_msg_queue_init(struct hiredis_okvm_msg_queue *queue)
+{
+    QUEUE_INIT(&queue->queue_head);
+    uv_mutex_init(&queue->queue_mutex);
+    return 0;
+}
+int hiredis_okvm_msg_queue_push(struct hiredis_okvm_msg_queue *queue, struct hiredis_okvm_msg *msg)
+{
+    uv_mutex_lock(&queue->queue_mutex);
+    QUEUE_INSERT_TAIL(&queue->queue_head, &msg->link);
+    uv_mutex_unlock(&queue->queue_mutex);
+
+    return 0;
+}
+struct hiredis_okvm_msg *hiredis_okvm_msg_queue_pop(struct hiredis_okvm_msg_queue *queue)
+{
+    struct hiredis_okvm_msg *msg = NULL;
+    QUEUE *ptr = NULL;
+
+    uv_mutex_lock(&queue->queue_mutex);
+    if (!QUEUE_EMPTY(&queue->queue_head)){
+        ptr = QUEUE_HEAD(&queue->queue_head);
+        msg = QUEUE_DATA(ptr, struct hiredis_okvm_msg, link);
+    }
+    uv_mutex_unlock(&queue->queue_mutex);
+
+    return msg;
+}
+
 static int hiredis_okvm_thread_parse_slaves_or_sentinels(struct hiredis_okvm_thread *okvm, redisReply *reply)
 {
     int i = 0;
@@ -145,14 +175,83 @@ static int hiredis_okvm_thread_get_replicas(struct hiredis_okvm_thread *okvm,
 
     return rc;
 }
-int hiredis_okvm_thread_init(struct hiredis_okvm_thread *okvm_thr)
+
+static void hiredis_okvm_thread_async_cb(uv_async_t* handle)
 {
-    // Create thread
-    return 0;
+    // Do nothing
+    struct hiredis_okvm_thread *okvm_thr = (struct hiredis_okvm_thread*)handle->data;
+    okvm_thr->state = 0;
+    uv_stop(&okvm_thr->loop);
 }
 
-int hiredis_okvm_thread_fini(struct hiredis_okvm_thread *okvm_thr)
+static void hiredis_okvm_thr_svc(void *arg)
 {
+    struct hiredis_okvm_thread *okvm_thr = (struct hiredis_okvm_thread*)arg;
+
+    HIREDIS_OKVM_LOG_INFO("Enter the okvm thread(%p)", arg);
+
+    if (0 != uv_loop_init(&okvm_thr->loop)){
+        HIREDIS_OKVM_LOG_ERROR("Start worker thread failed");
+        return;
+    }
+
+    if (0 != uv_async_init(&okvm_thr->loop, &okvm_thr->notify, hiredis_okvm_thread_async_cb)){
+        HIREDIS_OKVM_LOG_ERROR("Start worker thread. init async failed");
+        return;
+    }
+    okvm_thr->notify.data = arg;
+
+    uv_mutex_lock(&okvm_thr->state_mutex);
+    okvm_thr->state = 1;
+    uv_mutex_unlock(&okvm_thr->state_mutex);
+    uv_cond_broadcast(&okvm_thr->state_cond);
+
+    uv_run(&okvm_thr->loop, UV_RUN_DEFAULT);
+    uv_loop_close(&okvm_thr->loop);
+
+    HIREDIS_OKVM_LOG_INFO("Leave the okvm thread(%p)", arg);
+}
+
+int hiredis_okvm_thread_start(struct hiredis_okvm_thread *okvm_thr)
+{
+    // Create thread
+    int rc = 0;
+
+    if (okvm_thr->state == 1)
+        return 0;
+
+    uv_mutex_lock(&okvm_thr->state_mutex);
+    if (okvm_thr->state == 1){
+        uv_mutex_unlock(&okvm_thr->state_mutex);
+        return 0;
+    }
+    uv_mutex_unlock(&okvm_thr->state_mutex);
+
+    rc = uv_thread_create(&okvm_thr->worker, hiredis_okvm_thr_svc, (void*)okvm_thr); 
+    if (rc != 0){
+        HIREDIS_OKVM_LOG_ERROR("Start iothread failed rc(%d)", rc);
+        return rc;
+    }
+
+    uv_mutex_lock(&okvm_thr->state_mutex);
+    while( okvm_thr->state != 1){
+        rc = uv_cond_timedwait(&okvm_thr->state_cond, &okvm_thr->state_mutex, 150 * 1e6);
+        if (rc != 0){
+            break;
+        }
+    }
+    uv_mutex_unlock(&okvm_thr->state_mutex);
+
+    return rc;
+}
+
+int hiredis_okvm_thread_stop(struct hiredis_okvm_thread *okvm_thr)
+{
+    uv_mutex_lock(&okvm_thr->state_mutex);
+    okvm_thr->state = 0;
+    uv_mutex_unlock(&okvm_thr->state_mutex);
+    uv_async_send(&okvm_thr->notify);
+    uv_thread_join(&okvm_thr->worker);
     return 0;
 }
 

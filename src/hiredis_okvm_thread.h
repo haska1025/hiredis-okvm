@@ -22,7 +22,13 @@ struct hiredis_okvm_msg_queue
 {
     void *queue_head[2];
     uv_async_t notify;
+    uv_mutex_t queue_mutex;
 };
+
+int hiredis_okvm_msg_queue_init(struct hiredis_okvm_msg_queue *queue);
+int hiredis_okvm_msg_queue_push(struct hiredis_okvm_msg_queue *queue, struct hiredis_okvm_msg *msg);
+struct hiredis_okvm_msg *hiredis_okvm_msg_queue_pop(struct hiredis_okvm_msg_queue *queue);
+static inline uv_async_t * hiredis_okvm_msg_queue_get_notify(struct hiredis_okvm_msg_queue *queue){return &queue->notify;}
 
 struct hiredis_okvm_thread
 {
@@ -43,18 +49,22 @@ struct hiredis_okvm_thread
     uv_mutex_t state_mutex;
     uv_cond_t state_cond;
     uv_async_t notify;
+    int state;
 };
 
 #define INIT_HIREDIS_OKVM_THREAD(okvm_thr) \
     do{\
         (okvm_thr)->write_ctx = NULL;\
         (okvm_thr)->read_ctx = NULL;\
+        uv_mutex_init(&(okvm_thr)->state_mutex);\
+        uv_cond_init(&(okvm_thr)->state_cond);\
+        (okvm_thr)->state = 0;\
     }while(0);
 
 
 
-int hiredis_okvm_thread_init(struct hiredis_okvm_thread *okvm_thr);
-int hiredis_okvm_thread_fini(struct hiredis_okvm_thread *okvm_thr);
+int hiredis_okvm_thread_start(struct hiredis_okvm_thread *okvm_thr);
+int hiredis_okvm_thread_stop(struct hiredis_okvm_thread *okvm_thr);
 
 #endif//_HIREDIS_OKVM_CONNPOOL_H_
 
