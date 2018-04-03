@@ -64,6 +64,134 @@ struct hiredis_okvm_msg *hiredis_okvm_msg_queue_pop(struct hiredis_okvm_msg_queu
     return msg;
 }
 
+/******************************* The redis async context *********************/
+static void hiredis_okvm_async_cmd_callback(redisAsyncContext *c, void *r, void *privdata)
+{
+}
+
+static void authCallback(redisAsyncContext *c, void *r, void *privdata)
+{
+    redisReply *reply = r;
+    hiredis_okvm_async_context *async_ctx = privdata;
+    if (!reply){
+        hiredis_okvm_async_context_fini(c);
+    }else{
+        if (strcmp(reply->str, "OK") != 0){
+            hiredis_okvm_async_context_fini(c);
+        }else{
+            hiredis_okvm_async_context_check_role(c);
+        }
+        freeReplyObject(reply);
+        reply = NULL;
+    }
+}
+void hiredis_okvm_async_context_check_role_callback(redisAsyncContext *c, void *r, void *privdata)
+{
+    redisReply *reply = r;
+    hiredis_okvm_async_context *async_ctx = privdata;
+
+    if (!reply){
+        hiredis_okvm_async_context_fini(c);
+    }else{
+        if(strcmp("master", reply->element[0]->str) == 0
+         || strcmp("slave", reply->element[0]->str) == 0){
+            async_ctx->state = OKVM_ESTABLISHED;
+        }else{
+            hiredis_okvm_async_context_fini(c);
+        }
+    }
+}
+static void connectCallback(const redisAsyncContext *c, int status)
+{
+    // If connection is ok, ready to auth or check role
+    if (status != REDIS_OK){
+        hiredis_okvm_async_context_fini((struct hiredis_okvm_async_context*)c->data);
+    }else{
+        async_ctx->state = OKVM_CONNECTED;
+        hiredis_okvm_async_context_auth();
+    }
+}
+static void disconnectCallback(const redisAsyncContext *c, int status)
+{
+    hiredis_okvm_async_context_fini((struct hiredis_okvm_async_context*)c->data);
+}
+int hiredis_okvm_async_context_init(struct hiredis_okvm_async_context *async_ctx, struct hiredis_okvm_thread *thr)
+{
+    async_ctx->ctx = NULL;
+    async_ctx->state = OKVM_CLOSED;
+    async_ctx->okvm_thr = thr;
+    return 0;
+}
+int hiredis_okvm_async_context_fini(struct hiredis_okvm_async_context *async_ctx)
+{
+    async_ctx->state = OKVM_CLOSED;
+    if (async_ctx->ctx){
+        // Need call ?
+        // redisAsyncDisconnect(async_ctx->ctx);
+        freeAsyncRedis(async_ctx->ctx);
+        async_ctx->ctx = NULL;
+    }
+    return 0;
+}
+int hiredis_okvm_async_context_connect(struct hiredis_okvm_async_context *async_ctx, char *ip, int port)
+{
+    redisAsyncContext *ctx = NULL;
+
+    if (async_ctx->state == OKVM_CLOSED){
+        ctx = redisAsyncConnect(ip, port);
+        if (!ctx || ctx->err){
+            HIREDIS_OKVM_LOG_ERROR("Connect to redis(%s:%d) failed(%s)", ip, port, ctx?ctx->errstr:"No error reason");
+            if (ctx)redisAsyncFree(ctx);
+
+            return -1;
+        }
+
+        redisLibuvAttach(ctx, &async_ctx->okvm_thr->loop);
+        redisAsyncSetConnectCallback(ctx, connectCallback);
+        redisAsyncSetDisconnectCallback(ctx,disconnectCallback);
+        async_ctx->ctx = ctx;
+        async_ctx->state = OKVM_CONNECTING;
+        ctx->data = async_ctx;
+    }
+
+    return 0;
+}
+int hiredis_okvm_async_context_auth(struct hiredis_okvm_async_context *async_ctx)
+{
+    if (async_ctx->state == OKVM_CONNECTED){
+        // do auth
+        if (g_okvm.password){
+            int rc = REDIS_OK;
+            char cmd[DEFAULT_CMD_LEN];
+            snprintf(cmd, DEFAULT_CMD_LEN, "AUTH %s", g_okvm.password);
+            rc = redisAsyncCommand(async_ctx->ctx, authCallback, async_ctx, cmd);
+            if (rc != REDIS_OK){ 
+                hiredis_okvm_async_context_fini(async_ctx);
+            }else{
+                async_ctx->state = OKVM_AUTH;
+            }
+        }else{
+            hiredis_okvm_async_context_check_role(async_ctx);
+        }
+    }
+}
+void hiredis_okvm_async_context_check_role(struct hiredis_okvm_async_context *async_ctx)
+{
+    if (async_ctx->state == OKVM_CONNECTED || async_ctx->state == OKVM_AUTH){
+        // Check role
+        int rc = redisAsyncCommand(async_ctx->ctx, hiredis_okvm_async_context_check_role_callback, async_ctx, "ROLE");
+        if (rc != REDIS_OK){
+            hiredis_okvm_async_context_fini(async_ctx);
+        }else{
+            async_ctx->state = OKVM_CHECK_ROLE;
+        }
+    }
+}
+int hiredis_okvm_async_context_execute(struct hiredis_okvm_async_context *async_ctx, struct hiredis_okvm_msg *msg)
+{
+    return redisAsyncCommand(async_ctx->ctx, hiredis_okvm_async_cmd_callback, msg, msg->data);
+}
+
 /******************************* The redis host information *********************/
 // The timeout unit is milliseconds.
 static redisContext *hiredis_okvm_thread_connect(char *ip, int port, int timeout)
@@ -81,64 +209,6 @@ static redisContext *hiredis_okvm_thread_connect(char *ip, int port, int timeout
         return NULL;
     }
     return ctx;
-}
-
-
-static int hiredis_okvm_thread_connect_server(struct hiredis_okvm_thread *okvm_thr, char *ip, int port)
-{
-    int rc = 0;
-    redisContext* ctx = NULL;
-    redisReply* reply = NULL;
-    struct timeval timeout;
-    char cmd[DEFAULT_CMD_LEN];
-
-    // Wait for 500ms
-    ctx = hiredis_okvm_thread_connect(ip, port, 500); 
-    if (!ctx)
-        return -1;
-
-    // do auth
-    if (g_okvm.password){
-        snprintf(cmd, DEFAULT_CMD_LEN, "AUTH %s", g_okvm.password);
-        reply = redisCommand(ctx, cmd);
-        if (!reply || reply->type != REDIS_REPLY_STRING){
-            rc = -4;
-            goto err;
-        }
-        if (strcmp(reply->str, "OK") != 0){
-            rc = -5;
-            goto err;
-        }
-        freeReplyObject(reply);
-        reply = NULL;
-    }
-    // Check role
-    reply = redisCommand(ctx, "ROLE");
-    if (!reply || reply->type != REDIS_REPLY_ARRAY || reply->elements <= 0){
-            rc = -6;
-        goto err;
-    }
-
-    if(strcmp("master", reply->element[0]->str) == 0){
-        okvm_thr->write_ctx = ctx;
-    }else if(strcmp("slave", reply->element[0]->str) == 0){
-        okvm_thr->read_ctx = ctx;
-    }else{
-        rc = -7;
-    }
-err:
-
-    HIREDIS_OKVM_LOG_ERROR("Connect to server result(%d). ip(%s) port(%d) password(%s)",
-            rc,
-            ip,
-            port,
-            g_okvm.password?g_okvm.password:"No password");
-
-    if (rc != 0){
-        redisFree(ctx);
-    }
-    freeReplyObject(reply);
-    return rc;
 }
 
 static int hiredis_okvm_thread_parse_slaves_or_sentinels(struct hiredis_okvm_thread *okvm, redisReply *reply)
@@ -165,16 +235,7 @@ static int hiredis_okvm_thread_parse_slaves_or_sentinels(struct hiredis_okvm_thr
             }
         }
 
-        rc = hiredis_okvm_thread_connect_server(okvm, hi->ip, hi->port);
-        if (rc == 0){
-            QUEUE_INSERT_TAIL(&okvm->slaves_head, &hi->link);
-        }else{
-            free(hi->ip);
-            hi->ip = NULL;
-            hi->port = 0;
-            free(hi);
-            hi = NULL;
-        }
+        QUEUE_INSERT_TAIL(&okvm->slaves_head, &hi->link);
     }
 
     return rc;
@@ -195,11 +256,8 @@ static int hiredis_okvm_thread_get_master(struct hiredis_okvm_thread *okvm, char
 
     reply = redisCommand(ctx, cmd);
     if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 1){
-        rc = hiredis_okvm_thread_connect_server(okvm, reply->element[0]->str, atoi(reply->element[1]->str));
-        if (rc == 0){
-            okvm->master.ip = strdup(reply->element[0]->str);
-            okvm->master.port = atoi(reply->element[1]->str);
-        }
+        okvm->master.ip = strdup(reply->element[0]->str);
+        okvm->master.port = atoi(reply->element[1]->str);
     }
     freeReplyObject(reply);
     return rc;
