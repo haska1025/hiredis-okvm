@@ -12,6 +12,8 @@ extern struct hiredis_okvm g_okvm;
 
 #define DEFAULT_CMD_LEN 512
 
+// Reference:https://dzone.com/articles/high-availability-with-redis-sentinels-connecting
+
 /***************************** The message ***************************/
 struct hiredis_okvm_msg * hiredis_okvm_msg_alloc(int type, char *data, int len)
 {
@@ -82,9 +84,9 @@ static redisContext *hiredis_okvm_thread_connect(char *ip, int port, int timeout
 }
 
 
-static int hiredis_okvm_thread_connect_server(struct hiredis_okvm_thread *okvm_thr, char *ip, int port, int is_master)
+static int hiredis_okvm_thread_connect_server(struct hiredis_okvm_thread *okvm_thr, char *ip, int port)
 {
-    int rc = -1;
+    int rc = 0;
     redisContext* ctx = NULL;
     redisReply* reply = NULL;
     struct timeval timeout;
@@ -99,33 +101,49 @@ static int hiredis_okvm_thread_connect_server(struct hiredis_okvm_thread *okvm_t
     if (g_okvm.password){
         snprintf(cmd, DEFAULT_CMD_LEN, "AUTH %s", g_okvm.password);
         reply = redisCommand(ctx, cmd);
-        if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 1){
-            okvm_thr->master.ip = strdup(reply->element[0]->str);
-            okvm_thr->master.port = atoi(reply->element[1]->str);
-            rc = 0;
+        if (!reply || reply->type != REDIS_REPLY_STRING){
+            rc = -4;
+            goto err;
         }
+        if (strcmp(reply->str, "OK") != 0){
+            rc = -5;
+            goto err;
+        }
+        freeReplyObject(reply);
+        reply = NULL;
     }
     // Check role
-    snprintf(cmd, DEFAULT_CMD_LEN, "SENTINEL get-master-addr-by-name %s", g_okvm.db_name? g_okvm.db_name:"mymaster");
+    reply = redisCommand(ctx, "ROLE");
+    if (!reply || reply->type != REDIS_REPLY_ARRAY || reply->elements <= 0){
+            rc = -6;
+        goto err;
+    }
 
-    reply = redisCommand(ctx, cmd);
-    if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 1){
-        okvm_thr->master.ip = strdup(reply->element[0]->str);
-        okvm_thr->master.port = atoi(reply->element[1]->str);
-        rc = 0;
+    if(strcmp("master", reply->element[0]->str) == 0){
+        okvm_thr->write_ctx = ctx;
+    }else if(strcmp("slave", reply->element[0]->str) == 0){
+        okvm_thr->read_ctx = ctx;
+    }else{
+        rc = -7;
+    }
+err:
+
+    HIREDIS_OKVM_LOG_ERROR("Connect to server result(%d). ip(%s) port(%d) password(%s)",
+            rc,
+            ip,
+            port,
+            g_okvm.password?g_okvm.password:"No password");
+
+    if (rc != 0){
+        redisFree(ctx);
     }
     freeReplyObject(reply);
     return rc;
 }
-static int hiredis_okvm_thread_connect_master(struct hiredis_okvm_thread *okvm_thr, char *ip, int port)
-{
-}
-static int hiredis_okvm_thread_connect_slave(struct hiredis_okvm_thread *okvm_thr, char *ip, int port)
-{
-}
 
 static int hiredis_okvm_thread_parse_slaves_or_sentinels(struct hiredis_okvm_thread *okvm, redisReply *reply)
 {
+    int rc = 0;
     int i = 0;
     for (; i < reply->elements; ++i){
         int j = 0;
@@ -147,10 +165,19 @@ static int hiredis_okvm_thread_parse_slaves_or_sentinels(struct hiredis_okvm_thr
             }
         }
 
-        QUEUE_INSERT_TAIL(&okvm->slaves_head, &hi->link);
+        rc = hiredis_okvm_thread_connect_server(okvm, hi->ip, hi->port);
+        if (rc == 0){
+            QUEUE_INSERT_TAIL(&okvm->slaves_head, &hi->link);
+        }else{
+            free(hi->ip);
+            hi->ip = NULL;
+            hi->port = 0;
+            free(hi);
+            hi = NULL;
+        }
     }
 
-    return 0;
+    return rc;
 }
 static int hiredis_okvm_thread_get_master(struct hiredis_okvm_thread *okvm, char *ip, int port)
 {
@@ -168,9 +195,11 @@ static int hiredis_okvm_thread_get_master(struct hiredis_okvm_thread *okvm, char
 
     reply = redisCommand(ctx, cmd);
     if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 1){
-        okvm->master.ip = strdup(reply->element[0]->str);
-        okvm->master.port = atoi(reply->element[1]->str);
-        rc = 0;
+        rc = hiredis_okvm_thread_connect_server(okvm, reply->element[0]->str, atoi(reply->element[1]->str));
+        if (rc == 0){
+            okvm->master.ip = strdup(reply->element[0]->str);
+            okvm->master.port = atoi(reply->element[1]->str);
+        }
     }
     freeReplyObject(reply);
     return rc;
@@ -244,12 +273,30 @@ static int hiredis_okvm_thread_get_replicas(struct hiredis_okvm_thread *okvm,
 }
 static void hiredis_okvm_thread_process_inner_msg(struct hiredis_okvm_thread *okvm_thr, struct hiredis_okvm_msg *msg)
 {
+    int rc = 0;
+
     if (msg->type == OKVM_INNER_CMD_STOP){
         okvm_thr->state = 0;
         uv_stop(&okvm_thr->loop);
     } else if (msg->type == OKVM_INNER_CMD_CONNECT_SLAVE){
+        rc = hiredis_okvm_thread_get_replicas(okvm_thr, msg->data, hiredis_okvm_thread_connect_server);
     } else if (msg->type == OKVM_INNER_CMD_CONNECT_MASTER){
+        rc = hiredis_okvm_thread_get_replicas(okvm_thr, msg->data, hiredis_okvm_thread_connect_server);
     } else if (msg->type == OKVM_INNER_CMD_CONNECT_SENTINEL){
+        char *host_str = strdup(g_okvm.redis_host);
+        rc = hiredis_okvm_thread_get_replicas(okvm_thr, host_str, hiredis_okvm_thread_get_master);
+        if (rc != 0){
+            HIREDIS_OKVM_LOG_ERROR("No master exist. the sentinel(%s", host_str);
+            free(host_str);
+            return;
+        }
+        rc = hiredis_okvm_thread_get_replicas(okvm_thr, host_str, hiredis_okvm_thread_get_slaves);
+        if (rc != 0){
+            HIREDIS_OKVM_LOG_ERROR("No slave exist. the sentinel(%s", host_str);
+        }
+        free(host_str);
+        
+        // Dispatch master and slave ip to everyone.
     }
 }
 static void hiredis_okvm_thread_inner_async_cb(uv_async_t *handle)
@@ -263,6 +310,8 @@ static void hiredis_okvm_thread_inner_async_cb(uv_async_t *handle)
             break;
         }
         hiredis_okvm_thread_process_inner_msg(okvm_thr, msg);
+        hiredis_okvm_msg_free(msg);
+        msg = NULL;
     }
 }
 
@@ -317,6 +366,25 @@ static void hiredis_okvm_thr_svc(void *arg)
     uv_loop_close(&okvm_thr->loop);
 
     HIREDIS_OKVM_LOG_INFO("Leave the okvm thread(%p)", arg);
+}
+
+int hiredis_okvm_thread_init(struct hiredis_okvm_thread *okvm_thr)
+{
+    okvm_thr->write_ctx = NULL;
+    okvm_thr->read_ctx = NULL;
+    okvm_thr->role = 0;
+    QUEUE_INIT(&okvm_thr->read_link);
+    QUEUE_INIT(&okvm_thr->write_link);
+    QUEUE_INIT(&okvm_thr->slaves_head);
+
+    hiredis_okvm_msg_queue_init(&okvm_thr->inner_queue);
+    hiredis_okvm_msg_queue_init(&okvm_thr->read_queue);
+    hiredis_okvm_msg_queue_init(&okvm_thr->write_queue);
+    uv_mutex_init(&okvm_thr->state_mutex);
+    uv_cond_init(&okvm_thr->state_cond);
+    okvm_thr->state = 0;
+
+    return 0;
 }
 
 int hiredis_okvm_thread_start(struct hiredis_okvm_thread *okvm_thr)
@@ -398,7 +466,11 @@ int hiredis_okvm_thread_pool_push(struct hiredis_okvm_thread_pool *thr_pool, str
     thr_ptr = thr_pool->cur_thr;
     uv_mutex_unlock(&thr_pool->mutex);
 
-    thr = QUEUE_DATA(thr_ptr, struct hiredis_okvm_thread, link);
+    if (msg->type == OKVM_EXTERNAL_CMD_READ){
+        thr = QUEUE_DATA(thr_ptr, struct hiredis_okvm_thread, read_link);
+    }else{
+        thr = QUEUE_DATA(thr_ptr, struct hiredis_okvm_thread, write_link);
+    }
     return hiredis_okvm_thread_push(thr, msg);
 }
 int hiredis_okvm_thread_pool_fini(struct hiredis_okvm_thread_pool *thr_pool)

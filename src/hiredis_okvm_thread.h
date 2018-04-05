@@ -54,12 +54,14 @@ static inline uv_async_t * hiredis_okvm_msg_queue_get_notify(struct hiredis_okvm
 struct hiredis_okvm_thread
 {
     // The redis context which indicate the connection between the hiredis and the redis server.
-    redisContext *write_ctx;
     redisContext *read_ctx;
+    redisContext *write_ctx;
     int role;
 
-    // Used to thread pool link list
-    void *link[2];
+    // Used to read thread pool link list
+    void *read_link[2];
+    // Used to write thread pool link list
+    void *write_link[2];
 
     // The next two member just used by leader
     // The slave host info used for read
@@ -81,20 +83,7 @@ struct hiredis_okvm_thread
     int state;
 };
 
-#define INIT_HIREDIS_OKVM_THREAD(okvm_thr) \
-    do{\
-        (okvm_thr)->write_ctx = NULL;\
-        (okvm_thr)->read_ctx = NULL;\
-        (okvm_thr)->role = 0;\
-        QUEUE_INIT(&(okvm_thr)->link);\
-        QUEUE_INIT(&(okvm_thr)->slaves_head);\
-        uv_mutex_init(&(okvm_thr)->state_mutex);\
-        uv_cond_init(&(okvm_thr)->state_cond);\
-        (okvm_thr)->state = 0;\
-    }while(0);
-
-
-
+int hiredis_okvm_thread_init(struct hiredis_okvm_thread *okvm_thr);
 int hiredis_okvm_thread_start(struct hiredis_okvm_thread *okvm_thr);
 int hiredis_okvm_thread_stop(struct hiredis_okvm_thread *okvm_thr);
 int hiredis_okvm_thread_push(struct hiredis_okvm_thread *okvm_thr, struct hiredis_okvm_msg *msg);

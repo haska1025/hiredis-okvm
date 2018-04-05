@@ -10,6 +10,9 @@
 // The global variable
 struct hiredis_okvm g_okvm;
 int g_loglevel = LOG_INFO;
+struct hiredis_okvm_thread_pool read_thread_pool;
+struct hiredis_okvm_thread_pool write_thread_pool;
+
 static struct hiredis_okvm_thread **g_okvm_threads = NULL;
 
 
@@ -57,7 +60,7 @@ int hiredis_okvm_init(struct hiredis_okvm *param)
 
     for (i = 0; i < conn_num; ++i) {
         g_okvm_threads[i] = malloc(sizeof(struct hiredis_okvm_thread));
-        INIT_HIREDIS_OKVM_THREAD(g_okvm_threads[i]);
+        hiredis_okvm_thread_init(g_okvm_threads[i]);
         rc = hiredis_okvm_thread_init(g_okvm_threads[i]);
         if (rc != 0)
             return rc;
