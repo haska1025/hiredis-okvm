@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
-
+#include <adapters/libuv.h>
 // Myself hdr file
 #include "hiredis_okvm_thread.h"
 #include "hiredis_okvm_log.h"
@@ -130,7 +130,7 @@ int hiredis_okvm_async_context_fini(struct hiredis_okvm_async_context *async_ctx
     if (async_ctx->ctx){
         // Need call ?
         // redisAsyncDisconnect(async_ctx->ctx);
-        freeAsyncRedis(async_ctx->ctx);
+        redisAsyncFree(async_ctx->ctx);
         async_ctx->ctx = NULL;
     }
     return 0;
@@ -421,7 +421,6 @@ int hireids_okvm_mgr_init(struct hiredis_okvm_mgr *mgr, int thr_num)
 
     for (i = 0; i < thr_num; ++i) {
         mgr->threads[i] = malloc(sizeof(struct hiredis_okvm_thread));
-        hiredis_okvm_thread_init(mgr->threads[i]);
         rc = hiredis_okvm_thread_init(mgr->threads[i]);
         if (rc != 0)
             return rc;
@@ -463,7 +462,7 @@ int hiredis_okvm_mgr_broadcast(struct hiredis_okvm_mgr *okvm, struct hiredis_okv
 {
     int i = 0;
     for (; i < okvm->threads_nr; ++i){
-        hiredis_okvm_thead_push(okvm->threads[i], msg);
+        hiredis_okvm_thread_push(okvm->threads[i], msg);
     }
     return 0;
 }
@@ -489,13 +488,13 @@ int hiredis_okvm_mgr_init_sentinel(struct hiredis_okvm_mgr *okvm)
 
     // Dispatch master and slave ip to everyone.
     msg = hiredis_okvm_mgr_create_inner_msg(&okvm->master, OKVM_INNER_CMD_CONNECT_MASTER);
-    hireids_okvm_mgr_broadcast(okvm, msg);
+    hiredis_okvm_mgr_broadcast(okvm, msg);
 
     QUEUE_FOREACH(qptr, &okvm->slaves_head){
         hi = QUEUE_DATA(qptr, struct hiredis_okvm_host_info, link);
         HIREDIS_OKVM_LOG_INFO("Slaves ip(%s) port(%d)", hi->ip, hi->port);
         msg = hiredis_okvm_mgr_create_inner_msg(hi, OKVM_INNER_CMD_CONNECT_SLAVE);
-        hireids_okvm_mgr_broadcast(okvm, msg);
+        hiredis_okvm_mgr_broadcast(okvm, msg);
     }
     return rc;
 }

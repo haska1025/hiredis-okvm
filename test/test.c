@@ -14,7 +14,6 @@ int main( int argc, char ** argv)
     qptr = NULL;
 
     INIT_HIREDIS_OKVM(&okvm);
-    QUEUE_INIT(&okvm_thr.slaves_head);
 
     okvm.connections = 0;
     okvm.db_index = 2;
@@ -29,38 +28,38 @@ int main( int argc, char ** argv)
 
     // case 1
     HIREDIS_OKVM_LOG_INFO("Test case 1"); 
-    rc = hiredis_okvm_thread_get_slaves(&okvm_thr, "127.0.0.1", 26379);
-    QUEUE_FOREACH(qptr, &okvm_thr.slaves_head){
+    rc = hiredis_okvm_mgr_get_slaves(&g_mgr, "127.0.0.1", 26379);
+    QUEUE_FOREACH(qptr, &g_mgr.slaves_head){
         hi = QUEUE_DATA(qptr, struct hiredis_okvm_host_info, link);
         HIREDIS_OKVM_LOG_INFO("Slaves ip(%s) port(%d)", hi->ip, hi->port);
     }
     // case 2
     HIREDIS_OKVM_LOG_INFO("Test case 2"); 
-    rc = hiredis_okvm_thread_get_master(&okvm_thr, "127.0.0.1", 26379);
-    HIREDIS_OKVM_LOG_INFO("Master ip(%s) port(%d)", okvm_thr.master.ip, okvm_thr.master.port);
+    rc = hiredis_okvm_mgr_get_master(&g_mgr, "127.0.0.1", 26379);
+    HIREDIS_OKVM_LOG_INFO("Master ip(%s) port(%d)", g_mgr.master.ip, g_mgr.master.port);
 
     // case 3
     HIREDIS_OKVM_LOG_INFO("Test case 3"); 
     // Ready to remove queue
-    while(!QUEUE_EMPTY(&okvm_thr.slaves_head)){
-        qptr = QUEUE_HEAD(&okvm_thr.slaves_head);
+    while(!QUEUE_EMPTY(&g_mgr.slaves_head)){
+        qptr = QUEUE_HEAD(&g_mgr.slaves_head);
         hi = QUEUE_DATA(qptr, struct hiredis_okvm_host_info, link);
         QUEUE_REMOVE(qptr);
         HIREDIS_OKVM_LOG_INFO("Remove slaves ip(%s) port(%d)", hi->ip, hi->port);
         free(hi);
         hi = NULL;
     }
-    rc = hiredis_okvm_thread_get_replicas(&okvm_thr, hiredis_okvm_thread_get_slaves);
-    QUEUE_FOREACH(qptr, &okvm_thr.slaves_head){
+    rc = hiredis_okvm_mgr_get_replicas(&g_mgr, okvm.redis_host, hiredis_okvm_mgr_get_slaves);
+    QUEUE_FOREACH(qptr, &g_mgr.slaves_head){
         hi = QUEUE_DATA(qptr, struct hiredis_okvm_host_info, link);
         HIREDIS_OKVM_LOG_INFO("Slaves ip(%s) port(%d)", hi->ip, hi->port);
     }
     // case 4
     HIREDIS_OKVM_LOG_INFO("Test case 4"); 
-    free(okvm_thr.master.ip);
-    okvm_thr.master.port = 0;
-    rc = hiredis_okvm_thread_get_replicas(&okvm_thr, hiredis_okvm_thread_get_master);
-    HIREDIS_OKVM_LOG_INFO("Master ip(%s) port(%d)", okvm_thr.master.ip, okvm_thr.master.port);
+    free(g_mgr.master.ip);
+    g_mgr.master.port = 0;
+    rc = hiredis_okvm_mgr_get_replicas(&g_mgr, okvm.redis_host, hiredis_okvm_mgr_get_master);
+    HIREDIS_OKVM_LOG_INFO("Master ip(%s) port(%d)", g_mgr.master.ip, g_mgr.master.port);
 
     return 0;
 }

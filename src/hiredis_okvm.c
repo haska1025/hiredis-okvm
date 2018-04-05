@@ -46,6 +46,7 @@ int hiredis_okvm_init(struct hiredis_okvm *param)
 
     g_okvm.connections = conn_num;
 
+    hireids_okvm_mgr_init(&g_mgr, conn_num);
     return 0;
 }
 int hiredis_okvm_fini()
