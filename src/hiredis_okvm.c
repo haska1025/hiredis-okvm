@@ -9,12 +9,8 @@
 
 // The global variable
 struct hiredis_okvm g_okvm;
+struct hiredis_okvm_mgr g_mgr;
 int g_loglevel = LOG_INFO;
-struct hiredis_okvm_thread_pool read_thread_pool;
-struct hiredis_okvm_thread_pool write_thread_pool;
-
-static struct hiredis_okvm_thread **g_okvm_threads = NULL;
-
 
 int hiredis_okvm_init(struct hiredis_okvm *param)
 {
@@ -50,22 +46,6 @@ int hiredis_okvm_init(struct hiredis_okvm *param)
 
     g_okvm.connections = conn_num;
 
-    g_okvm_threads = malloc(sizeof(struct hiredis_okvm_thread*) * conn_num);
-    if (!g_okvm_threads)
-        return -1;
-
-    for (i = 0; i < conn_num; ++i) {
-        g_okvm_threads[i] = NULL;
-    }
-
-    for (i = 0; i < conn_num; ++i) {
-        g_okvm_threads[i] = malloc(sizeof(struct hiredis_okvm_thread));
-        hiredis_okvm_thread_init(g_okvm_threads[i]);
-        rc = hiredis_okvm_thread_init(g_okvm_threads[i]);
-        if (rc != 0)
-            return rc;
-    }
-
     return 0;
 }
 int hiredis_okvm_fini()
@@ -84,14 +64,6 @@ int hiredis_okvm_fini()
         free(g_okvm.password);
         g_okvm.password = NULL;
     }
-
-    for (i = 0; i < g_okvm.connections; ++i) {
-        free(g_okvm_threads[i]);
-        g_okvm_threads[i] = NULL;
-    }
-
-    free(g_okvm_threads);
-    g_okvm_threads = NULL;
 
     return 0;
 }

@@ -74,9 +74,9 @@ struct hiredis_okvm_async_context
 
 int hiredis_okvm_async_context_init(struct hiredis_okvm_async_context *async_ctx, struct hiredis_okvm_thread *thr);
 int hiredis_okvm_async_context_fini(struct hiredis_okvm_async_context *async_ctx);
-int hiredis_okvm_async_context_connect(struct hiredis_okvm_async_context *async_ctx);
-int hiredis_okvm_async_context_auth(struct hiredis_okvm_async_context *async_ctx);
-int hiredis_okvm_async_context_check_role(struct hiredis_okvm_async_context *async_ctx);
+int hiredis_okvm_async_context_connect(struct hiredis_okvm_async_context *async_ctx, char *ip, int port);
+void hiredis_okvm_async_context_auth(struct hiredis_okvm_async_context *async_ctx);
+void hiredis_okvm_async_context_check_role(struct hiredis_okvm_async_context *async_ctx);
 int hiredis_okvm_async_context_execute(struct hiredis_okvm_async_context *async_ctx, struct hiredis_okvm_msg *msg);
 
 
@@ -85,17 +85,6 @@ struct hiredis_okvm_thread
     struct hiredis_okvm_async_context read_ctx;
     struct hiredis_okvm_async_context write_ctx;
     int role;
-
-    // Used to read thread pool link list
-    void *read_link[2];
-    // Used to write thread pool link list
-    void *write_link[2];
-
-    // The next two member just used by leader
-    // The slave host info used for read
-    void *slaves_head[2];
-    // The master host info used for write
-    struct hiredis_okvm_host_info master;
 
     // Used to talk with everyone about internal message.
     struct hiredis_okvm_msg_queue inner_queue;
@@ -116,15 +105,43 @@ int hiredis_okvm_thread_start(struct hiredis_okvm_thread *okvm_thr);
 int hiredis_okvm_thread_stop(struct hiredis_okvm_thread *okvm_thr);
 int hiredis_okvm_thread_push(struct hiredis_okvm_thread *okvm_thr, struct hiredis_okvm_msg *msg);
 
-struct hiredis_okvm_thread_pool
+struct hiredis_okvm_send_policy
 {
-    void *thr_head[2];
-    QUEUE *cur_thr;
+    struct hiredis_okvm_thread **threads;
+    int max_len;
+    int cur_idx;
     uv_mutex_t mutex;
 };
 
-int hiredis_okvm_thread_pool_init(struct hiredis_okvm_thread_pool *thr_pool);
-int hiredis_okvm_thread_pool_push(struct hiredis_okvm_thread_pool *thr_pool, struct hiredis_okvm_msg *msg);
-int hiredis_okvm_thread_pool_fini(struct hiredis_okvm_thread_pool *thr_pool);
+int hiredis_okvm_send_policy_init(struct hiredis_okvm_send_policy *policy);
+int hiredis_okvm_send_policy_send(struct hiredis_okvm_send_policy *policy, struct hiredis_okvm_msg *msg);
+int hiredis_okvm_send_policy_fini(struct hiredis_okvm_send_policy *policy);
+
+struct hiredis_okvm_mgr
+{
+    int threads_nr;
+    struct hiredis_okvm_thread **threads;
+    struct hiredis_okvm_send_policy read_policy;
+    struct hiredis_okvm_send_policy write_policy;
+    // The next two member just used by leader
+    // The slave host info used for read
+    void *slaves_head[2];
+    // The master host info used for write
+    struct hiredis_okvm_host_info master;
+};
+
+int hiredis_okvm_mgr_init(struct hiredis_okvm_mgr *mgr, int thr_num);
+int hiredis_okvm_mgr_fini(struct hiredis_okvm_mgr *mgr);
+int hiredis_okvm_mgr_parse_slaves_or_sentinels(struct hiredis_okvm_mgr *okvm, redisReply *reply);
+int hiredis_okvm_mgr_get_master(void *data, char *ip, int port);
+int hiredis_okvm_mgr_get_slaves(void *data, char *ip, int port);
+int hiredis_okvm_mgr_get_replicas(void *data, 
+        char *host_str,
+        int (*fn)(void *data, char *ip, int port));
+struct hiredis_okvm_msg * hiredis_okvm_mgr_create_inner_msg(struct hiredis_okvm_host_info *host, int cmd);
+int hiredis_okvm_mgr_init_sentinel(struct hiredis_okvm_mgr *okvm);
+int hiredis_okvm_mgr_broadcast(struct hiredis_okvm_mgr *okvm, struct hiredis_okvm_msg *msg);
+
+
 #endif//_HIREDIS_OKVM_CONNPOOL_H_
 
