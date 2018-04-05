@@ -35,6 +35,9 @@ int hiredis_okvm_init(struct hiredis_okvm *param)
     if (param->db_name){
         g_okvm.db_name = strdup(param->db_name);
     }
+    if (param->password){
+        g_okvm.password = strdup(param->password);
+    }
 
     if (conn_num < DEFAULT_CONN_NUM)
         conn_num = DEFAULT_CONN_NUM;
@@ -73,6 +76,10 @@ int hiredis_okvm_fini()
     if (g_okvm.db_name){
         free(g_okvm.db_name);
         g_okvm.db_name = NULL;
+    }
+    if (g_okvm.password){
+        free(g_okvm.password);
+        g_okvm.password = NULL;
     }
 
     for (i = 0; i < g_okvm.connections; ++i) {

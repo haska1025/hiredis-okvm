@@ -8,10 +8,6 @@
 #define LEADER 1
 #define FOLLOWER 2
 
-#define HIREDIS_OKVM_MSG_INNER 1
-#define HIREDIS_OKVM_MSG_READ 2
-#define HIREDIS_OKVM_MSG_WRITE 3
-
 enum{
     OKVM_INNER_CMD_STOP = 1,
     // wirter to do
@@ -20,6 +16,9 @@ enum{
     OKVM_INNER_CMD_CONNECT_MASTER,
     // Just leader to do
     OKVM_INNER_CMD_CONNECT_SENTINEL,
+    // External message
+    OKVM_EXTERNAL_CMD_READ = 10001,
+    OKVM_EXTERNAL_CMD_WRITE,
 };
 
 struct hiredis_okvm_host_info
@@ -31,11 +30,15 @@ struct hiredis_okvm_host_info
 
 struct hiredis_okvm_msg
 {
-    void *link[2];
-    char *msg;
-    // Read or Write
+    // Read or Write or inner
     int type;
+    void *link[2];
+    int data_len;
+    char data[0];
 };
+struct hiredis_okvm_msg * hiredis_okvm_msg_alloc(int type, char *data, int len);
+void hiredis_okvm_msg_free(struct hiredis_okvm_msg *msg);
+
 struct hiredis_okvm_msg_queue
 {
     void *queue_head[2];
@@ -57,12 +60,13 @@ struct hiredis_okvm_thread
 
     // Used to thread pool link list
     void *link[2];
-    // Just used by leader
+
+    // The next two member just used by leader
+    // The slave host info used for read
     void *slaves_head[2];
     // The master host info used for write
     struct hiredis_okvm_host_info master;
-    // The slave host info used for read
-    struct hiredis_okvm_host_info slave;
+
     // Used to talk with everyone about internal message.
     struct hiredis_okvm_msg_queue inner_queue;
     // The write message queue

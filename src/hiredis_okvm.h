@@ -7,6 +7,7 @@
         (okvm)->db_index = 0;\
         (okvm)->redis_host = NULL;\
         (okvm)->db_name = NULL;\
+        (okvm)->password = NULL;\
     }while(0);
 
 struct hiredis_okvm
@@ -21,6 +22,8 @@ struct hiredis_okvm
     char *redis_host;
     /* The master group name for redis cluster */
     char *db_name;
+    /* The password for redis server */
+    char *password;
 };
 
 extern int hiredis_okvm_init(struct hiredis_okvm *param);
