@@ -46,8 +46,7 @@ int hiredis_okvm_init(struct hiredis_okvm *param)
 
     g_okvm.connections = conn_num;
 
-    hireids_okvm_mgr_init(&g_mgr, conn_num);
-    return 0;
+    return hireids_okvm_mgr_init(&g_mgr, conn_num);
 }
 int hiredis_okvm_fini()
 {
@@ -66,7 +65,7 @@ int hiredis_okvm_fini()
         g_okvm.password = NULL;
     }
 
-    return 0;
+    return hiredis_okvm_mgr_fini(&g_mgr);
 }
 
 int hiredis_okvm_do_async(const char *cmd)

@@ -47,6 +47,7 @@ int hiredis_okvm_msg_queue_push(struct hiredis_okvm_msg_queue *queue, struct hir
     uv_mutex_lock(&queue->queue_mutex);
     QUEUE_INSERT_TAIL(&queue->queue_head, &msg->link);
     uv_mutex_unlock(&queue->queue_mutex);
+    uv_async_send(&queue->notify);
 
     return 0;
 }
@@ -59,6 +60,7 @@ struct hiredis_okvm_msg *hiredis_okvm_msg_queue_pop(struct hiredis_okvm_msg_queu
     if (!QUEUE_EMPTY(&queue->queue_head)){
         ptr = QUEUE_HEAD(&queue->queue_head);
         msg = QUEUE_DATA(ptr, struct hiredis_okvm_msg, link);
+        QUEUE_REMOVE(ptr);
     }
     uv_mutex_unlock(&queue->queue_mutex);
 
@@ -389,7 +391,7 @@ int hiredis_okvm_send_policy_init(struct hiredis_okvm_send_policy *policy)
     uv_mutex_init(&policy->mutex);
     return 0;
 }
-int hiredis_okvm_send_policy_push(struct hiredis_okvm_send_policy *policy, struct hiredis_okvm_msg *msg)
+int hiredis_okvm_send_policy_send(struct hiredis_okvm_send_policy *policy, struct hiredis_okvm_msg *msg)
 {
     struct hiredis_okvm_thread *thr = NULL;
 
@@ -410,10 +412,17 @@ int hireids_okvm_mgr_init(struct hiredis_okvm_mgr *mgr, int thr_num)
     int rc = 0;
     int i = 0;
 
+    if (thr_num <= 0)
+        thr_num = 1;
+    if (thr_num > 32)
+        thr_num = 32;
+
     mgr->threads_nr = thr_num;
     mgr->threads = malloc(sizeof(struct hiredis_okvm_thread*) * thr_num);
-    if (!mgr->threads)
+    if (!mgr->threads){
+        HIREDIS_OKVM_LOG_ERROR("okvm mgr init to malloc theads failed");
         return -1;
+    }
 
     for (i = 0; i < thr_num; ++i) {
         mgr->threads[i] = NULL;
@@ -421,7 +430,8 @@ int hireids_okvm_mgr_init(struct hiredis_okvm_mgr *mgr, int thr_num)
 
     for (i = 0; i < thr_num; ++i) {
         mgr->threads[i] = malloc(sizeof(struct hiredis_okvm_thread));
-        rc = hiredis_okvm_thread_init(mgr->threads[i]);
+        hiredis_okvm_thread_init(mgr->threads[i]);
+        hiredis_okvm_thread_start(mgr->threads[i]);
         if (rc != 0)
             return rc;
     }
@@ -435,14 +445,26 @@ int hireids_okvm_mgr_init(struct hiredis_okvm_mgr *mgr, int thr_num)
 int hiredis_okvm_mgr_fini(struct hiredis_okvm_mgr *mgr)
 {
     int i = 0;
+    struct hiredis_okvm_host_info *hi = NULL;
+    QUEUE *qptr = NULL;
 
     for (i = 0; i < mgr->threads_nr; ++i) {
+        hiredis_okvm_thread_stop(mgr->threads[i]);
         free(mgr->threads[i]);
         mgr->threads[i] = NULL;
     }
 
     free(mgr->threads);
     mgr->threads = NULL;
+
+    while(!QUEUE_EMPTY(&mgr->slaves_head)){
+        qptr = QUEUE_HEAD(&mgr->slaves_head);
+        hi = QUEUE_DATA(qptr, struct hiredis_okvm_host_info, link);
+        QUEUE_REMOVE(qptr);
+        HIREDIS_OKVM_LOG_INFO("Remove slaves ip(%s) port(%d)", hi->ip, hi->port);
+        free(hi);
+        hi = NULL;
+    }
 
     return 0;
 }
@@ -472,24 +494,22 @@ int hiredis_okvm_mgr_init_sentinel(struct hiredis_okvm_mgr *okvm)
     struct hiredis_okvm_msg *msg = NULL;
     QUEUE *qptr = NULL;
     struct hiredis_okvm_host_info *hi = NULL;
-    char *host_str = strdup(g_okvm.redis_host);
 
-    rc = hiredis_okvm_mgr_get_replicas(okvm, host_str, hiredis_okvm_mgr_get_master);
+    rc = hiredis_okvm_mgr_get_replicas(okvm, g_okvm.redis_host, hiredis_okvm_mgr_get_master);
     if (rc != 0){
-        HIREDIS_OKVM_LOG_ERROR("No master exist. the sentinel(%s", host_str);
-        free(host_str);
+        HIREDIS_OKVM_LOG_ERROR("No master exist. the sentinel(%s)", g_okvm.redis_host);
         return -1;
     }
-    rc = hiredis_okvm_mgr_get_replicas(okvm, host_str, hiredis_okvm_mgr_get_slaves);
+    rc = hiredis_okvm_mgr_get_replicas(okvm, g_okvm.redis_host, hiredis_okvm_mgr_get_slaves);
     if (rc != 0){
-        HIREDIS_OKVM_LOG_ERROR("No slave exist. the sentinel(%s", host_str);
+        HIREDIS_OKVM_LOG_ERROR("No slave exist. the sentinel(%s)", g_okvm.redis_host);
     }
-    free(host_str);
 
     // Dispatch master and slave ip to everyone.
     msg = hiredis_okvm_mgr_create_inner_msg(&okvm->master, OKVM_INNER_CMD_CONNECT_MASTER);
     hiredis_okvm_mgr_broadcast(okvm, msg);
 
+    // Slaves not exist, dispatch master for read
     QUEUE_FOREACH(qptr, &okvm->slaves_head){
         hi = QUEUE_DATA(qptr, struct hiredis_okvm_host_info, link);
         HIREDIS_OKVM_LOG_INFO("Slaves ip(%s) port(%d)", hi->ip, hi->port);
@@ -501,7 +521,6 @@ int hiredis_okvm_mgr_init_sentinel(struct hiredis_okvm_mgr *okvm)
 
 int hiredis_okvm_mgr_parse_slaves_or_sentinels(struct hiredis_okvm_mgr *okvm, redisReply *reply)
 {
-    int rc = 0;
     int i = 0;
     for (; i < reply->elements; ++i){
         int j = 0;
@@ -526,11 +545,10 @@ int hiredis_okvm_mgr_parse_slaves_or_sentinels(struct hiredis_okvm_mgr *okvm, re
         QUEUE_INSERT_TAIL(&okvm->slaves_head, &hi->link);
     }
 
-    return rc;
+    return 0;
 }
 int hiredis_okvm_mgr_get_master(void *data, char *ip, int port)
 {
-    int rc = -1;
     redisContext* ctx = NULL;
     redisReply* reply = NULL;
     char cmd[DEFAULT_CMD_LEN];
@@ -543,17 +561,24 @@ int hiredis_okvm_mgr_get_master(void *data, char *ip, int port)
     snprintf(cmd, DEFAULT_CMD_LEN, "SENTINEL get-master-addr-by-name %s", g_okvm.db_name? g_okvm.db_name:"mymaster");
 
     reply = redisCommand(ctx, cmd);
-    if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 1){
-        okvm->master.ip = strdup(reply->element[0]->str);
-        okvm->master.port = atoi(reply->element[1]->str);
+    if (!reply || reply->type != REDIS_REPLY_ARRAY || reply->elements < 1){
+        HIREDIS_OKVM_LOG_ERROR("Get master by cmd(%s) failed err(%s)", cmd, reply?reply->str:"No reason"); 
+        return -1;
     }
+
+    okvm->master.ip = strdup(reply->element[0]->str);
+    okvm->master.port = atoi(reply->element[1]->str);
     freeReplyObject(reply);
-    return rc;
+    reply = NULL;
+
+    redisFree(ctx);
+    ctx = NULL;
+
+    return 0;
 }
 
 int hiredis_okvm_mgr_get_slaves(void *data, char *ip, int port)
 {
-    int rc = -1;
     redisContext* ctx = NULL;
     redisReply* reply = NULL;
     struct timeval timeout;
@@ -568,13 +593,20 @@ int hiredis_okvm_mgr_get_slaves(void *data, char *ip, int port)
     snprintf(cmd, DEFAULT_CMD_LEN, "SENTINEL slaves %s", g_okvm.db_name? g_okvm.db_name:"mymaster");
 
     reply = redisCommand(ctx, cmd);
-    if (reply && reply->type == REDIS_REPLY_ARRAY && reply->elements > 1){
-        hiredis_okvm_mgr_parse_slaves_or_sentinels(okvm, reply);
-        rc = 0;
+    if (!reply || reply->type != REDIS_REPLY_ARRAY || reply->elements < 1){
+        HIREDIS_OKVM_LOG_ERROR("Get slaves by cmd(%s) failed err(%s)", cmd, reply?reply->str:"No reason"); 
+        return -1;
     }
 
+    hiredis_okvm_mgr_parse_slaves_or_sentinels(okvm, reply);
+
     freeReplyObject(reply);
-    return rc;
+    reply = NULL;
+
+    redisFree(ctx);
+    ctx = NULL;
+
+    return 0;
 }
 
 int hiredis_okvm_mgr_get_replicas(void *data, 
@@ -585,6 +617,7 @@ int hiredis_okvm_mgr_get_replicas(void *data,
     char *token, *str1;
     char *host, *port;
     char *save_ptr1, *save_ptr2;
+    char *dup_host_str = strdup(host_str);
 
     str1 = NULL;
     token = NULL;
@@ -593,10 +626,13 @@ int hiredis_okvm_mgr_get_replicas(void *data,
     save_ptr1 = NULL;
     save_ptr2 = NULL;
 
-    if (!fn)
+    if (!fn){
+        free(dup_host_str);
+        dup_host_str;
         return -1;
+    }
 
-    for (str1 = host_str; ; str1 = NULL){
+    for (str1 = dup_host_str; ; str1 = NULL){
         token = strtok_r(str1, ";", &save_ptr1);
         if (token == NULL)
             break;
@@ -614,6 +650,9 @@ int hiredis_okvm_mgr_get_replicas(void *data,
         if (rc == 0)
             break;//Get the host
     }
+
+    free(dup_host_str);
+    dup_host_str;
 
     return rc;
 }
