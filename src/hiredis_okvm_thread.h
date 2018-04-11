@@ -33,12 +33,19 @@ struct hiredis_okvm_msg
 {
     // Read or Write or inner
     int type;
+    int ref_count;
     void *link[2];
+    redisReply *reply;
+    uv_mutex_t msg_mutex;
+    uv_cond_t msg_cond;
     int data_len;
     char data[0];
 };
-struct hiredis_okvm_msg * hiredis_okvm_msg_alloc(int type, char *data, int len);
+struct hiredis_okvm_msg * hiredis_okvm_msg_alloc(int type, const char *data, int len);
+void hiredis_okvm_msg_inc_ref(struct hiredis_okvm_msg *msg);
 void hiredis_okvm_msg_free(struct hiredis_okvm_msg *msg);
+void hireids_okvm_msg_set_reply(struct hiredis_okvm_msg *msg, redisReply *reply);
+void *hiredis_okvm_msg_get_reply(struct hiredis_okvm_msg *msg);
 
 struct hiredis_okvm_msg_queue
 {

@@ -29,8 +29,8 @@ struct hiredis_okvm
 extern int hiredis_okvm_init(struct hiredis_okvm *param);
 extern int hiredis_okvm_fini();
 
-extern int hiredis_okvm_do_async(const char *cmd);
-extern void *hiredis_okvm_do_sync(const char *cmd);
+extern int hiredis_okvm_write(const char *cmd, int len);
+extern void *hiredis_okvm_read(const char *cmd, int len);
 
 extern void hiredis_okvm_set_log_level(int l);
 

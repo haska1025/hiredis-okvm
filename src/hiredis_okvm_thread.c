@@ -16,11 +16,14 @@ extern struct hiredis_okvm_mgr g_mgr;
 // Reference:https://dzone.com/articles/high-availability-with-redis-sentinels-connecting
 
 /***************************** The message ***************************/
-struct hiredis_okvm_msg * hiredis_okvm_msg_alloc(int type, char *data, int len)
+struct hiredis_okvm_msg * hiredis_okvm_msg_alloc(int type, const char *data, int len)
 {
     struct hiredis_okvm_msg *msg = malloc(sizeof(struct hiredis_okvm_msg) + len);
     QUEUE_INIT(&msg->link);
+    uv_mutex_init(&msg->msg_mutex);
+    uv_cond_init(&msg->msg_cond);
     msg->type = type;
+    msg->reply = NULL;
     if (data){
         msg->data_len = len;
         memcpy(msg->data, data, len);
@@ -29,12 +32,32 @@ struct hiredis_okvm_msg * hiredis_okvm_msg_alloc(int type, char *data, int len)
     }
     return msg;
 }
-
+void hiredis_okvm_msg_inc_ref(struct hiredis_okvm_msg *msg)
+{
+}
 void hiredis_okvm_msg_free(struct hiredis_okvm_msg *msg)
 {
     free(msg);
 }
+void hireids_okvm_msg_set_reply(struct hiredis_okvm_msg *msg, redisReply *reply)
+{
+    uv_mutex_lock(&msg->msg_mutex); 
+    msg->reply = reply;
+    uv_mutex_unlock(&msg->msg_mutex); 
+    uv_cond_signal(&msg->msg_cond);
+}
+void *hiredis_okvm_msg_get_reply(struct hiredis_okvm_msg *msg)
+{
+    void *reply = NULL;
 
+    uv_mutex_lock(&msg->msg_mutex); 
+    while(!msg->reply){
+        uv_cond_wait(&msg->msg_cond, &msg->msg_mutex);
+    }
+    reply = msg->reply;
+    uv_mutex_unlock(&msg->msg_mutex); 
+    return reply;
+}
 /**************************** The message queue ***************************/
 int hiredis_okvm_msg_queue_init(struct hiredis_okvm_msg_queue *queue)
 {

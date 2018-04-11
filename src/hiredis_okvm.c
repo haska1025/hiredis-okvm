@@ -68,13 +68,18 @@ int hiredis_okvm_fini()
     return hiredis_okvm_mgr_fini(&g_mgr);
 }
 
-int hiredis_okvm_do_async(const char *cmd)
+int hiredis_okvm_write(const char *cmd, int len)
 {
-    return 0;
+    struct hiredis_okvm_msg *msg = hiredis_okvm_msg_alloc(OKVM_EXTERNAL_CMD_WRITE, cmd, len); 
+    return hiredis_okvm_send_policy_send(&g_mgr.write_policy, msg);
 }
-void *hiredis_okvm_do_sync(const char *cmd)
+
+void *hiredis_okvm_read(const char *cmd, int len)
 {
-    return NULL;
+    int rc = 0;
+    struct hiredis_okvm_msg *msg = hiredis_okvm_msg_alloc(OKVM_EXTERNAL_CMD_WRITE, cmd, len); 
+
+    rc = hiredis_okvm_send_policy_send(&g_mgr.read_policy, msg);
 }
 
 void hiredis_okvm_set_log_level(int l)
