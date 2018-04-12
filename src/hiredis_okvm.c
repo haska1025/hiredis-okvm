@@ -131,7 +131,7 @@ void redis_okvm_reply_free_iterator(struct redis_okvm_reply_iterator *it)
 struct redis_okvm_reply_iterator * redis_okvm_reply_next(struct redis_okvm_reply_iterator *it)
 {
     redisReply *reply = it->reply;
-    return reply->element[it->pos++];
+    return redis_okvm_reply_get_iterator(reply->element[it->pos++]);
 }
 // return int value
 int redis_okvm_reply_next_int(struct redis_okvm_reply_iterator *it)
