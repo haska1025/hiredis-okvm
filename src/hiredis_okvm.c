@@ -8,11 +8,11 @@
 #define MAX_CONN_NUM 64
 
 // The global variable
-struct hiredis_okvm g_okvm;
-struct hiredis_okvm_mgr g_mgr;
+struct redis_okvm g_okvm;
+struct redis_okvm_mgr g_mgr;
 int g_loglevel = LOG_INFO;
 
-int hiredis_okvm_init(struct hiredis_okvm *param)
+int redis_okvm_init(struct redis_okvm *param)
 {
     int rc = 0;
     int i = 0;
@@ -48,7 +48,7 @@ int hiredis_okvm_init(struct hiredis_okvm *param)
 
     return hireids_okvm_mgr_init(&g_mgr, conn_num);
 }
-int hiredis_okvm_fini()
+int redis_okvm_fini()
 {
     int i = 0;
 
@@ -65,28 +65,107 @@ int hiredis_okvm_fini()
         g_okvm.password = NULL;
     }
 
-    return hiredis_okvm_mgr_fini(&g_mgr);
+    return redis_okvm_mgr_fini(&g_mgr);
 }
 
-int hiredis_okvm_write(const char *cmd, int len)
+int redis_okvm_write(const char *cmd, int len)
 {
-    struct hiredis_okvm_msg *msg = hiredis_okvm_msg_alloc(OKVM_EXTERNAL_CMD_WRITE, cmd, len); 
-    return hiredis_okvm_send_policy_send(&g_mgr.write_policy, msg);
+    struct redis_okvm_msg *msg = redis_okvm_msg_alloc(OKVM_EXTERNAL_CMD_WRITE, cmd, len); 
+    return redis_okvm_send_policy_send(&g_mgr.write_policy, msg);
 }
 
-void *hiredis_okvm_read(const char *cmd, int len)
+void *redis_okvm_read(const char *cmd, int len)
 {
     int rc = 0;
-    struct hiredis_okvm_msg *msg = hiredis_okvm_msg_alloc(OKVM_EXTERNAL_CMD_WRITE, cmd, len); 
+    redisReply *reply = NULL;
+    struct redis_okvm_msg *msg = redis_okvm_msg_alloc(OKVM_EXTERNAL_CMD_WRITE, cmd, len); 
 
-    rc = hiredis_okvm_send_policy_send(&g_mgr.read_policy, msg);
+    rc = redis_okvm_send_policy_send(&g_mgr.read_policy, msg);
+    if (rc != 0){
+        redis_okvm_msg_free(msg);
+        msg = NULL;
+        return NULL;
+    }
+
+    reply = redis_okvm_msg_get_reply(msg);
+    redis_okvm_msg_free(msg);
+    msg = NULL;
+
+    return reply;
 }
 
-void hiredis_okvm_set_log_level(int l)
+void redis_okvm_reply_free(redis_okvm_reply *reply)
+{
+    freeReplyObject(reply);
+}
+
+// if has next element return 1; otherwise return 0.
+int redis_okvm_reply_has_next(struct redis_okvm_reply_iterator *it)
+{
+    if (it->pos < 0)
+        return 0;
+
+    redisReply *reply = it->reply;
+    if (reply->type == REDIS_REPLY_ARRAY && it->pos >= reply->elements)
+        return 0;
+
+    return 1;
+}
+
+struct redis_okvm_reply_iterator* redis_okvm_reply_get_iterator(redis_okvm_reply *reply)
+{
+    struct redis_okvm_reply_iterator *it = malloc(sizeof(struct redis_okvm_reply_iterator));
+    it->reply = reply;
+    // pos > 0 indicates has elements; pos < 0 indicates doesn't has element
+    it->pos = 0;
+
+    return it;
+}
+
+void redis_okvm_reply_free_iterator(struct redis_okvm_reply_iterator *it)
+{
+    free(it);
+}
+
+// return the new reply object
+struct redis_okvm_reply_iterator * redis_okvm_reply_next(struct redis_okvm_reply_iterator *it)
+{
+    redisReply *reply = it->reply;
+    return reply->element[it->pos++];
+}
+// return int value
+int redis_okvm_reply_next_int(struct redis_okvm_reply_iterator *it)
+{
+    redisReply *reply = it->reply;
+    int i = it->pos;
+    ++it->pos;
+    return reply->element[i]->integer;
+}
+// return string value
+char* redis_okvm_reply_next_str(struct redis_okvm_reply_iterator *it)
+{
+    redisReply *reply = it->reply;
+    int i = it->pos;
+    ++it->pos;
+    return reply->element[i]->str;
+}
+
+int redis_okvm_reply_int(redis_okvm_reply *reply)
+{
+    redisReply *r = reply;
+    return r->integer;
+}
+char* redis_okvm_reply_str(redis_okvm_reply *reply)
+{
+    redisReply *r = reply;
+    return r->str;
+}
+
+void redis_okvm_set_log_level(int l)
 {
     g_loglevel = l;
 }
-int hiredis_okvm_get_log_level()
+int redis_okvm_get_log_level()
 {
     return g_loglevel;
 }

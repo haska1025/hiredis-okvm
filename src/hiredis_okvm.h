@@ -10,7 +10,7 @@
         (okvm)->password = NULL;\
     }while(0);
 
-struct hiredis_okvm
+struct redis_okvm
 {
     // The number of the connection between the hiredis and redis server.
     int connections;
@@ -26,13 +26,39 @@ struct hiredis_okvm
     char *password;
 };
 
-extern int hiredis_okvm_init(struct hiredis_okvm *param);
-extern int hiredis_okvm_fini();
+// The redis reply type for object key-value model
+typedef void redis_okvm_reply;
+struct redis_okvm_reply_iterator
+{
+    redis_okvm_reply *reply;
+    int pos;
+};
 
-extern int hiredis_okvm_write(const char *cmd, int len);
-extern void *hiredis_okvm_read(const char *cmd, int len);
+extern int redis_okvm_init(struct redis_okvm *param);
+extern int redis_okvm_fini();
 
-extern void hiredis_okvm_set_log_level(int l);
+extern int redis_okvm_write(const char *cmd, int len);
+extern redis_okvm_reply * redis_okvm_read(const char *cmd, int len);
+extern void redis_okvm_reply_free(redis_okvm_reply *reply);
+
+// if has next element return 1; otherwise return 0.
+extern int redis_okvm_reply_has_next(struct redis_okvm_reply_iterator *it); 
+extern struct redis_okvm_reply_iterator* redis_okvm_reply_get_iterator(redis_okvm_reply *reply); 
+extern void redis_okvm_reply_free_iterator(struct redis_okvm_reply_iterator *it);
+
+// return the new reply object
+extern struct redis_okvm_reply_iterator * redis_okvm_reply_next(struct redis_okvm_reply_iterator *it);
+// return int value by iterator
+extern int redis_okvm_reply_next_int(struct redis_okvm_reply_iterator *it);
+// return string value by iterator
+extern char* redis_okvm_reply_next_str(struct redis_okvm_reply_iterator *it);
+
+// return int value for reply directly
+extern int redis_okvm_reply_int(redis_okvm_reply *reply);
+// return string value for reply directly
+extern char* redis_okvm_reply_str(redis_okvm_reply *reply);
+
+extern void redis_okvm_set_log_level(int l);
 
 #endif//_HIREDIS_OKVM_H_
 
