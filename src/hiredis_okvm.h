@@ -1,6 +1,10 @@
 #ifndef _HIREDIS_OKVM_H_
 #define _HIREDIS_OKVM_H_
 
+#define REDIS_OKVM_OK 0
+#define REDIS_OKVM_ERROR -1
+#define REDIS_OKVM_WAIT_REPLY -2
+
 #define INIT_HIREDIS_OKVM(okvm) \
     do{\
         (okvm)->connections = 1;\

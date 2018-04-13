@@ -44,7 +44,7 @@ struct redis_okvm_msg
 struct redis_okvm_msg * redis_okvm_msg_alloc(int type, const char *data, int len);
 void redis_okvm_msg_inc_ref(struct redis_okvm_msg *msg);
 void redis_okvm_msg_free(struct redis_okvm_msg *msg);
-void hireids_okvm_msg_set_reply(struct redis_okvm_msg *msg, redisReply *reply);
+void reids_okvm_msg_set_reply(struct redis_okvm_msg *msg, redisReply *reply);
 void *redis_okvm_msg_get_reply(struct redis_okvm_msg *msg);
 
 struct redis_okvm_msg_queue
@@ -61,12 +61,14 @@ static inline uv_async_t * redis_okvm_msg_queue_get_notify(struct redis_okvm_msg
 
 enum
 {
-    OKVM_CLOSED=1,
-    OKVM_CONNECTING,
-    OKVM_CONNECTED,
-    OKVM_AUTH,
-    OKVM_CHECK_ROLE,
-    OKVM_ESTABLISHED
+    OKVM_CLOSED=1,      // 1
+    OKVM_CONNECTING,    // 2
+    OKVM_CONNECTED,     // 3
+    OKVM_AUTH,          // 4
+    OKVM_CHECK_AUTH,    // 5
+    OKVM_ROLE,          // 6
+    OKVM_CHECK_ROLE,    // 7
+    OKVM_ESTABLISHED    // 8
 };
 
 struct redis_okvm_thread;
@@ -82,8 +84,6 @@ struct redis_okvm_async_context
 int redis_okvm_async_context_init(struct redis_okvm_async_context *async_ctx, struct redis_okvm_thread *thr);
 int redis_okvm_async_context_fini(struct redis_okvm_async_context *async_ctx);
 int redis_okvm_async_context_connect(struct redis_okvm_async_context *async_ctx, char *ip, int port);
-void redis_okvm_async_context_auth(struct redis_okvm_async_context *async_ctx);
-void redis_okvm_async_context_check_role(struct redis_okvm_async_context *async_ctx);
 int redis_okvm_async_context_execute(struct redis_okvm_async_context *async_ctx, struct redis_okvm_msg *msg);
 
 
@@ -145,10 +145,8 @@ int redis_okvm_mgr_get_slaves(void *data, char *ip, int port);
 int redis_okvm_mgr_get_replicas(void *data, 
         char *host_str,
         int (*fn)(void *data, char *ip, int port));
-struct redis_okvm_msg * redis_okvm_mgr_create_inner_msg(struct redis_okvm_host_info *host, int cmd);
 int redis_okvm_mgr_init_sentinel(struct redis_okvm_mgr *okvm);
-int redis_okvm_mgr_broadcast(struct redis_okvm_mgr *okvm, struct redis_okvm_msg *msg);
-
+int redis_okvm_mgr_broadcast(struct redis_okvm_mgr *okvm, struct redis_okvm_host_info *host, int cmd);
 
 #endif//_HIREDIS_OKVM_CONNPOOL_H_
 
