@@ -30,37 +30,23 @@ struct redis_okvm
     char *password;
 };
 
-// The redis reply type for object key-value model
-typedef void redis_okvm_reply;
-struct redis_okvm_reply_iterator
-{
-    redis_okvm_reply *reply;
-    int pos;
-};
-
 extern int redis_okvm_init(struct redis_okvm *param);
 extern int redis_okvm_fini();
 
 extern int redis_okvm_write(const char *cmd, int len);
-extern redis_okvm_reply * redis_okvm_read(const char *cmd, int len);
-extern void redis_okvm_reply_free(redis_okvm_reply *reply);
+extern int redis_okvm_read(const char *cmd, int len, void (*reply_cb)(void *reply));
 
-// if has next element return 1; otherwise return 0.
-extern int redis_okvm_reply_has_next(struct redis_okvm_reply_iterator *it); 
-extern struct redis_okvm_reply_iterator* redis_okvm_reply_get_iterator(redis_okvm_reply *reply); 
-extern void redis_okvm_reply_free_iterator(struct redis_okvm_reply_iterator *it);
-
-// return the new reply object
-extern struct redis_okvm_reply_iterator * redis_okvm_reply_next(struct redis_okvm_reply_iterator *it);
-// return int value by iterator
-extern int redis_okvm_reply_next_int(struct redis_okvm_reply_iterator *it);
-// return string value by iterator
-extern char* redis_okvm_reply_next_str(struct redis_okvm_reply_iterator *it);
-
+extern int redis_okvm_reply_length(void *reply);
+// return int value for reply by index from array 
+extern int redis_okvm_reply_idxof_int(void *reply, int idx);
+// return str value for reply by index from array 
+extern char* redis_okvm_reply_idxof_str(void *reply, int idx);
+// return object value for reply by index from array 
+extern void* redis_okvm_reply_idxof_obj(void *reply, int idx);
 // return int value for reply directly
-extern int redis_okvm_reply_int(redis_okvm_reply *reply);
+extern int redis_okvm_reply_int(void *reply);
 // return string value for reply directly
-extern char* redis_okvm_reply_str(redis_okvm_reply *reply);
+extern char* redis_okvm_reply_str(void *reply);
 
 extern void redis_okvm_set_log_level(int l);
 

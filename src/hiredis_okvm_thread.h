@@ -35,7 +35,9 @@ struct redis_okvm_msg
     int type;
     int ref_count;
     void *link[2];
-    redisReply *reply;
+    int reply;
+    void (*reply_cb)(void *reply);
+
     uv_mutex_t msg_mutex;
     uv_cond_t msg_cond;
     int data_len;
@@ -45,7 +47,7 @@ struct redis_okvm_msg * redis_okvm_msg_alloc(int type, const char *data, int len
 void redis_okvm_msg_inc_ref(struct redis_okvm_msg *msg);
 void redis_okvm_msg_free(struct redis_okvm_msg *msg);
 void reids_okvm_msg_set_reply(struct redis_okvm_msg *msg, redisReply *reply);
-void *redis_okvm_msg_get_reply(struct redis_okvm_msg *msg);
+int redis_okvm_msg_get_reply(struct redis_okvm_msg *msg);
 
 struct redis_okvm_msg_queue
 {
@@ -58,6 +60,7 @@ int redis_okvm_msg_queue_init(struct redis_okvm_msg_queue *queue);
 int redis_okvm_msg_queue_push(struct redis_okvm_msg_queue *queue, struct redis_okvm_msg *msg);
 struct redis_okvm_msg *redis_okvm_msg_queue_pop(struct redis_okvm_msg_queue *queue);
 static inline uv_async_t * redis_okvm_msg_queue_get_notify(struct redis_okvm_msg_queue *queue){return &queue->notify;}
+void redis_okvm_msg_queue_notify(struct redis_okvm_msg_queue *queue);
 
 enum
 {
@@ -85,7 +88,7 @@ int redis_okvm_async_context_init(struct redis_okvm_async_context *async_ctx, st
 int redis_okvm_async_context_fini(struct redis_okvm_async_context *async_ctx);
 int redis_okvm_async_context_connect(struct redis_okvm_async_context *async_ctx, char *ip, int port);
 int redis_okvm_async_context_execute(struct redis_okvm_async_context *async_ctx, struct redis_okvm_msg *msg);
-
+static inline int redis_okvm_async_context_ok(struct redis_okvm_async_context *async_ctx){return async_ctx->state == OKVM_ESTABLISHED;}
 
 struct redis_okvm_thread
 {
@@ -120,7 +123,9 @@ struct redis_okvm_send_policy
     uv_mutex_t mutex;
 };
 
-int redis_okvm_send_policy_init(struct redis_okvm_send_policy *policy);
+int redis_okvm_send_policy_init(struct redis_okvm_send_policy *policy,
+        struct redis_okvm_thread **thr,
+        int len);
 int redis_okvm_send_policy_send(struct redis_okvm_send_policy *policy, struct redis_okvm_msg *msg);
 int redis_okvm_send_policy_fini(struct redis_okvm_send_policy *policy);
 

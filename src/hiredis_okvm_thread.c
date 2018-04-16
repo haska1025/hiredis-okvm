@@ -25,7 +25,8 @@ struct redis_okvm_msg * redis_okvm_msg_alloc(int type, const char *data, int len
     QUEUE_INIT(&msg->link);
     uv_mutex_init(&msg->msg_mutex);
     uv_cond_init(&msg->msg_cond);
-    msg->reply = NULL;
+    msg->reply = 0;
+    msg->reply_cb = NULL;
     if (data){
         msg->data_len = len;
         memcpy(msg->data, data, len);
@@ -48,13 +49,17 @@ void redis_okvm_msg_free(struct redis_okvm_msg *msg)
 void redis_okvm_msg_set_reply(struct redis_okvm_msg *msg, redisReply *reply)
 {
     uv_mutex_lock(&msg->msg_mutex); 
-    msg->reply = reply;
+    if (msg->reply_cb){
+        msg->reply_cb(reply);
+    }
+    msg->reply = 1;
+
     uv_mutex_unlock(&msg->msg_mutex); 
     uv_cond_signal(&msg->msg_cond);
 }
-void *redis_okvm_msg_get_reply(struct redis_okvm_msg *msg)
+int redis_okvm_msg_get_reply(struct redis_okvm_msg *msg)
 {
-    void *reply = NULL;
+    int reply = 0;
 
     uv_mutex_lock(&msg->msg_mutex); 
     while(!msg->reply){
@@ -77,7 +82,7 @@ int redis_okvm_msg_queue_push(struct redis_okvm_msg_queue *queue, struct redis_o
     redis_okvm_msg_inc_ref(msg);
     QUEUE_INSERT_TAIL(&queue->queue_head, &msg->link);
     uv_mutex_unlock(&queue->queue_mutex);
-    uv_async_send(&queue->notify);
+    redis_okvm_msg_queue_notify(queue);
 
     return 0;
 }
@@ -96,7 +101,10 @@ struct redis_okvm_msg *redis_okvm_msg_queue_pop(struct redis_okvm_msg_queue *que
 
     return msg;
 }
-
+void redis_okvm_msg_queue_notify(struct redis_okvm_msg_queue *queue)
+{
+    uv_async_send(&queue->notify);
+}
 /******************************* The redis async context *********************/
 static void redis_okvm_async_cmd_callback(redisAsyncContext *c, void *r, void *privdata);
 static int redis_okvm_async_context_auth(struct redis_okvm_async_context *async_ctx)
@@ -140,6 +148,8 @@ static int redis_okvm_async_context_check_role(struct redis_okvm_async_context *
     if(strcmp("master", reply->element[0]->str) == 0
             || strcmp("slave", reply->element[0]->str) == 0){
         async_ctx->state = OKVM_ESTABLISHED;
+        redis_okvm_msg_queue_notify(&async_ctx->okvm_thr->read_queue);
+        redis_okvm_msg_queue_notify(&async_ctx->okvm_thr->write_queue);
     }else{
         rc = REDIS_OKVM_ERROR; 
     }
@@ -229,7 +239,7 @@ static void connectCallback(const redisAsyncContext *c, int status)
 {
     // If connection is ok, ready to auth or check role
     struct redis_okvm_async_context *async_ctx = c->data;
-    HIREDIS_OKVM_LOG_INFO("Redis async context(%p) connect callback. status(%d)", c, status);
+    HIREDIS_OKVM_LOG_INFO("Redis async context(%p) connect callback. status(%d)", async_ctx, status);
     if (status != REDIS_OK){
         redis_okvm_async_context_fini(async_ctx);
     }else{
@@ -238,7 +248,8 @@ static void connectCallback(const redisAsyncContext *c, int status)
 }
 static void disconnectCallback(const redisAsyncContext *c, int status)
 {
-    HIREDIS_OKVM_LOG_INFO("Redis async context(%p) disconnect callback. status(%d)", c, status);
+    struct redis_okvm_async_context *async_ctx = c->data;
+    HIREDIS_OKVM_LOG_INFO("Redis async context(%p) disconnect callback. status(%d)", async_ctx, status);
     redis_okvm_async_context_fini((struct redis_okvm_async_context*)c->data);
 }
 int redis_okvm_async_context_init(struct redis_okvm_async_context *async_ctx, struct redis_okvm_thread *thr)
@@ -254,9 +265,9 @@ int redis_okvm_async_context_fini(struct redis_okvm_async_context *async_ctx)
     async_ctx->state = OKVM_CLOSED;
     if (async_ctx->ctx){
         // Need call ?
-        // redisAsyncDisconnect(async_ctx->ctx);
-        //redisAsyncFree(async_ctx->ctx);
-        //async_ctx->ctx = NULL;
+        redisAsyncDisconnect(async_ctx->ctx);
+        redisAsyncFree(async_ctx->ctx);
+        async_ctx->ctx = NULL;
     }
     return 0;
 }
@@ -291,7 +302,14 @@ int redis_okvm_async_context_connect(struct redis_okvm_async_context *async_ctx,
 
 int redis_okvm_async_context_execute(struct redis_okvm_async_context *async_ctx, struct redis_okvm_msg *msg)
 {
-    return redisAsyncCommand(async_ctx->ctx, redis_okvm_async_cmd_callback, msg, msg->data);
+    int rc = REDIS_OK;
+    HIREDIS_OKVM_LOG_INFO("async_ctx(%p) execute message(%s)", async_ctx, msg->data);
+    rc = redisAsyncCommand(async_ctx->ctx, redis_okvm_async_cmd_callback, msg, msg->data);
+    if (rc != REDIS_OK){
+        HIREDIS_OKVM_LOG_ERROR("redisAsyncCommand failed rc(%d)", rc);
+        return REDIS_OKVM_ERROR;
+    }
+    return REDIS_OKVM_OK;
 }
 
 /******************************* The redis host information *********************/
@@ -357,11 +375,43 @@ static void redis_okvm_thread_inner_async_cb(uv_async_t *handle)
 static void redis_okvm_thread_read_async_cb(uv_async_t *handle)
 {
     struct redis_okvm_thread *okvm_thr = (struct redis_okvm_thread*)handle->data;
+    struct redis_okvm_msg *msg = NULL;
+
+    if (!redis_okvm_async_context_ok(&okvm_thr->read_ctx)){
+        HIREDIS_OKVM_LOG_WARNING("The read async context isn't ok");
+        return;
+    }
+
+    while(1){
+        msg = redis_okvm_msg_queue_pop(&okvm_thr->read_queue); 
+        if (!msg){
+            break;
+        }
+        redis_okvm_async_context_execute(&okvm_thr->read_ctx, msg);
+        redis_okvm_msg_free(msg);
+        msg = NULL;
+    }
 }
 
 static void redis_okvm_thread_write_async_cb(uv_async_t *handle)
 {
     struct redis_okvm_thread *okvm_thr = (struct redis_okvm_thread*)handle->data;
+    struct redis_okvm_msg *msg = NULL;
+
+    if (!redis_okvm_async_context_ok(&okvm_thr->write_ctx)){
+        HIREDIS_OKVM_LOG_WARNING("The write async context isn't ok");
+        return;
+    }
+
+    while(1){
+        msg = redis_okvm_msg_queue_pop(&okvm_thr->write_queue); 
+        if (!msg){
+            break;
+        }
+        redis_okvm_async_context_execute(&okvm_thr->write_ctx, msg);
+        redis_okvm_msg_free(msg);
+        msg = NULL;
+    }
 }
 static void redis_okvm_thr_svc(void *arg)
 {
@@ -483,11 +533,13 @@ int redis_okvm_thread_push(struct redis_okvm_thread *okvm_thr, struct redis_okvm
     }
 }
 
-int redis_okvm_send_policy_init(struct redis_okvm_send_policy *policy)
+int redis_okvm_send_policy_init(struct redis_okvm_send_policy *policy,
+        struct redis_okvm_thread **thr,
+        int len)
 {
-    policy->threads = NULL;
+    policy->threads = thr;
     policy->cur_idx = 0;
-    policy->max_len = 0;
+    policy->max_len = len;
     uv_mutex_init(&policy->mutex);
     return 0;
 }
@@ -536,8 +588,8 @@ int hireids_okvm_mgr_init(struct redis_okvm_mgr *mgr, int thr_num)
             return rc;
     }
 
-    redis_okvm_send_policy_init(&mgr->read_policy);
-    redis_okvm_send_policy_init(&mgr->write_policy);
+    redis_okvm_send_policy_init(&mgr->read_policy, mgr->threads, mgr->threads_nr);
+    redis_okvm_send_policy_init(&mgr->write_policy, mgr->threads, mgr->threads_nr);
 
     QUEUE_INIT(&mgr->slaves_head);
     QUEUE_INIT(&mgr->master.link);
@@ -559,6 +611,7 @@ int redis_okvm_mgr_fini(struct redis_okvm_mgr *mgr)
 
     free(mgr->threads);
     mgr->threads = NULL;
+    mgr->threads_nr = 0;
 
     while(!QUEUE_EMPTY(&mgr->slaves_head)){
         qptr = QUEUE_HEAD(&mgr->slaves_head);
@@ -568,6 +621,11 @@ int redis_okvm_mgr_fini(struct redis_okvm_mgr *mgr)
         free(hi);
         hi = NULL;
     }
+    if (mgr->master.ip){
+        free(mgr->master.ip);
+        mgr->master.ip = NULL;
+    }
+    mgr->master.port = 0;
 
     return 0;
 }

@@ -74,17 +74,18 @@ int redis_okvm_write(const char *cmd, int len)
     return redis_okvm_send_policy_send(&g_mgr.write_policy, msg);
 }
 
-void *redis_okvm_read(const char *cmd, int len)
+int redis_okvm_read(const char *cmd, int len, void (*reply_cb)(void *reply))
 {
     int rc = 0;
-    redisReply *reply = NULL;
-    struct redis_okvm_msg *msg = redis_okvm_msg_alloc(OKVM_EXTERNAL_CMD_WRITE, cmd, len); 
+    int reply = NULL;
+    struct redis_okvm_msg *msg = redis_okvm_msg_alloc(OKVM_EXTERNAL_CMD_READ, cmd, len);
+    msg->reply_cb = reply_cb;
 
     rc = redis_okvm_send_policy_send(&g_mgr.read_policy, msg);
     if (rc != 0){
         redis_okvm_msg_free(msg);
         msg = NULL;
-        return NULL;
+        return 0;
     }
 
     reply = redis_okvm_msg_get_reply(msg);
@@ -93,69 +94,34 @@ void *redis_okvm_read(const char *cmd, int len)
 
     return reply;
 }
-
-void redis_okvm_reply_free(redis_okvm_reply *reply)
+int redis_okvm_reply_length(void *reply)
 {
-    freeReplyObject(reply);
+    redisReply *r = reply;
+    return r->elements;
 }
 
-// if has next element return 1; otherwise return 0.
-int redis_okvm_reply_has_next(struct redis_okvm_reply_iterator *it)
+int redis_okvm_reply_idxof_int(void *reply, int idx)
 {
-    if (it->pos < 0)
-        return 0;
-
-    redisReply *reply = it->reply;
-    if (reply->type == REDIS_REPLY_ARRAY && it->pos >= reply->elements)
-        return 0;
-
-    return 1;
+    redisReply *r = reply;
+    return r->element[idx]->integer;
 }
 
-struct redis_okvm_reply_iterator* redis_okvm_reply_get_iterator(redis_okvm_reply *reply)
+char* redis_okvm_reply_idxof_str(void *reply, int idx)
 {
-    struct redis_okvm_reply_iterator *it = malloc(sizeof(struct redis_okvm_reply_iterator));
-    it->reply = reply;
-    // pos > 0 indicates has elements; pos < 0 indicates doesn't has element
-    it->pos = 0;
-
-    return it;
+    redisReply *r = reply;
+    return r->element[idx]->str;
 }
-
-void redis_okvm_reply_free_iterator(struct redis_okvm_reply_iterator *it)
+void* redis_okvm_reply_idxof_obj(void *reply, int idx)
 {
-    free(it);
+    redisReply *r = reply;
+    return r->element[idx];
 }
-
-// return the new reply object
-struct redis_okvm_reply_iterator * redis_okvm_reply_next(struct redis_okvm_reply_iterator *it)
-{
-    redisReply *reply = it->reply;
-    return redis_okvm_reply_get_iterator(reply->element[it->pos++]);
-}
-// return int value
-int redis_okvm_reply_next_int(struct redis_okvm_reply_iterator *it)
-{
-    redisReply *reply = it->reply;
-    int i = it->pos;
-    ++it->pos;
-    return reply->element[i]->integer;
-}
-// return string value
-char* redis_okvm_reply_next_str(struct redis_okvm_reply_iterator *it)
-{
-    redisReply *reply = it->reply;
-    int i = it->pos;
-    ++it->pos;
-    return reply->element[i]->str;
-}
-
-int redis_okvm_reply_int(redis_okvm_reply *reply)
+int redis_okvm_reply_int(void *reply)
 {
     redisReply *r = reply;
     return r->integer;
 }
-char* redis_okvm_reply_str(redis_okvm_reply *reply)
+char* redis_okvm_reply_str(void *reply)
 {
     redisReply *r = reply;
     return r->str;

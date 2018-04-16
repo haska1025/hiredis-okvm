@@ -71,11 +71,47 @@ void test_sentinel()
     g_okvm.db_name =  NULL;
 }
 
+void getall_test1(void *reply)
+{
+    int i = 0;
+    int length = 0;
+    char *field = NULL;
+
+    length = redis_okvm_reply_length(reply);
+    for (; i < length;){
+        field = redis_okvm_reply_idxof_str(reply, i++);
+        if (strcmp(field, "name") == 0){
+            HIREDIS_OKVM_LOG_INFO("getall_test1 name = %s", redis_okvm_reply_idxof_str(reply, i++));
+        }else if (strcmp(field, "age") == 0){
+            HIREDIS_OKVM_LOG_INFO("getall_test1 age = %s", redis_okvm_reply_idxof_str(reply, i++));
+        }else{
+            i++;
+        }
+    }
+}
+void test_cmd()
+{
+    char *msg = NULL;
+    char *msg2 = NULL;
+    char *msgget = NULL;
+
+    msg = "hset test:1 name zhangsan";
+    redis_okvm_write(msg, strlen(msg));
+
+    msg2 = "hset test:1 age 35";
+    redis_okvm_write(msg2, strlen(msg2));
+
+    msgget = "hgetall test:1";
+    redis_okvm_read(msgget, strlen(msgget), getall_test1);
+}
+
 int main( int argc, char ** argv)
 {
     char *host = NULL; 
     int rc = 0;
     struct redis_okvm okvm;
+
+    test_sentinel();
 
     INIT_HIREDIS_OKVM(&okvm);
 
@@ -93,10 +129,10 @@ int main( int argc, char ** argv)
         redis_okvm_fini();
         return -1;
     }
-    sleep(5);
-    redis_okvm_fini();
-    test_sentinel();
 
+    test_cmd();
+
+//    sleep(1);
     redis_okvm_fini();
 
     HIREDIS_OKVM_LOG_INFO("Test over");
