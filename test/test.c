@@ -132,7 +132,7 @@ int main( int argc, char ** argv)
 
     test_cmd();
 
-//    sleep(1);
+    sleep(1);
     redis_okvm_fini();
 
     HIREDIS_OKVM_LOG_INFO("Test over");

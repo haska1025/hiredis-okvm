@@ -18,7 +18,7 @@ extern struct redis_okvm_mgr g_mgr;
 /***************************** The message ***************************/
 struct redis_okvm_msg * redis_okvm_msg_alloc(int type, const char *data, int len)
 {
-    struct redis_okvm_msg *msg = malloc(sizeof(struct redis_okvm_msg) + len);
+    struct redis_okvm_msg *msg = malloc(sizeof(struct redis_okvm_msg) + len + 1);
 
     msg->type = type;
     msg->ref_count = 1;
@@ -29,7 +29,8 @@ struct redis_okvm_msg * redis_okvm_msg_alloc(int type, const char *data, int len
     msg->reply_cb = NULL;
     if (data){
         msg->data_len = len;
-        memcpy(msg->data, data, len);
+        // Copy the null terminator
+        memcpy(msg->data, data, len+1);
     }else{
         msg->data_len = 0;
     }
@@ -70,11 +71,45 @@ int redis_okvm_msg_get_reply(struct redis_okvm_msg *msg)
     return reply;
 }
 /**************************** The message queue ***************************/
-int redis_okvm_msg_queue_init(struct redis_okvm_msg_queue *queue)
+static void redis_okvm_msg_queue_async_cb(uv_async_t *handle)
 {
+    struct redis_okvm_msg_queue *queue = (struct redis_okvm_msg_queue*)handle->data;
+    struct redis_okvm_msg *msg = NULL;
+
+    if (!queue->can_pop(queue->okvm_thr)){
+        HIREDIS_OKVM_LOG_WARNING("The queue(%p) can't pop", queue);
+        return;
+    }
+
+    while(1){
+        msg = redis_okvm_msg_queue_pop(queue); 
+        if (!msg){
+            break;
+        }
+        queue->handle_msg(queue->okvm_thr, msg);
+        redis_okvm_msg_free(msg);
+        msg = NULL;
+    }
+}
+
+int redis_okvm_msg_queue_init(struct redis_okvm_msg_queue *queue,
+    struct redis_okvm_thread *okvm_thr,
+    int (*can_pop)(struct redis_okvm_thread *okvm_thr),
+    void (*handle_msg)(struct redis_okvm_thread *okvm_thr, struct redis_okvm_msg *msg))
+{
+    queue->okvm_thr = okvm_thr;
+    queue->can_pop = can_pop;
+    queue->handle_msg = handle_msg;
     QUEUE_INIT(&queue->queue_head);
     uv_mutex_init(&queue->queue_mutex);
-    return 0;
+
+    // Register message queue
+    queue->notify.data = queue;
+    if (0 != uv_async_init(&queue->okvm_thr->loop, &queue->notify, redis_okvm_msg_queue_async_cb)){
+        HIREDIS_OKVM_LOG_ERROR("Register notify for queue(%p) failed", queue);
+        return REDIS_OKVM_ERROR;
+    }
+    return REDIS_OKVM_OK;
 }
 int redis_okvm_msg_queue_push(struct redis_okvm_msg_queue *queue, struct redis_okvm_msg *msg)
 {
@@ -105,6 +140,7 @@ void redis_okvm_msg_queue_notify(struct redis_okvm_msg_queue *queue)
 {
     uv_async_send(&queue->notify);
 }
+
 /******************************* The redis async context *********************/
 static void redis_okvm_async_cmd_callback(redisAsyncContext *c, void *r, void *privdata);
 static int redis_okvm_async_context_auth(struct redis_okvm_async_context *async_ctx)
@@ -343,7 +379,11 @@ static int redis_okvm_thread_connect_slave(void *data, char *ip, int port)
     return redis_okvm_async_context_connect(&thr->read_ctx, ip, port);
 }
 
-static void redis_okvm_thread_process_inner_msg(struct redis_okvm_thread *okvm_thr, struct redis_okvm_msg *msg)
+static int redis_okvm_thread_can_pop_inner_msg(struct redis_okvm_thread *okvm_thr)
+{
+    return 1;
+}
+static void redis_okvm_thread_handle_inner_msg(struct redis_okvm_thread *okvm_thr, struct redis_okvm_msg *msg)
 {
     if (msg->type == OKVM_INNER_CMD_STOP){
         okvm_thr->state = 0;
@@ -356,63 +396,27 @@ static void redis_okvm_thread_process_inner_msg(struct redis_okvm_thread *okvm_t
         redis_okvm_mgr_init_sentinel(&g_mgr);
     }
 }
-static void redis_okvm_thread_inner_async_cb(uv_async_t *handle)
-{
-    struct redis_okvm_thread *okvm_thr = (struct redis_okvm_thread*)handle->data;
-    struct redis_okvm_msg *msg = NULL;
 
-    while(1){
-        msg = redis_okvm_msg_queue_pop(&okvm_thr->inner_queue); 
-        if (!msg){
-            break;
-        }
-        redis_okvm_thread_process_inner_msg(okvm_thr, msg);
-        redis_okvm_msg_free(msg);
-        msg = NULL;
-    }
+static int redis_okvm_thread_can_pop_read_msg(struct redis_okvm_thread *okvm_thr)
+{
+    return redis_okvm_async_context_ok(&okvm_thr->read_ctx);
 }
 
-static void redis_okvm_thread_read_async_cb(uv_async_t *handle)
+static void redis_okvm_thread_handle_read_msg(struct redis_okvm_thread *okvm_thr, struct redis_okvm_msg *msg)
 {
-    struct redis_okvm_thread *okvm_thr = (struct redis_okvm_thread*)handle->data;
-    struct redis_okvm_msg *msg = NULL;
-
-    if (!redis_okvm_async_context_ok(&okvm_thr->read_ctx)){
-        HIREDIS_OKVM_LOG_WARNING("The read async context isn't ok");
-        return;
-    }
-
-    while(1){
-        msg = redis_okvm_msg_queue_pop(&okvm_thr->read_queue); 
-        if (!msg){
-            break;
-        }
-        redis_okvm_async_context_execute(&okvm_thr->read_ctx, msg);
-        redis_okvm_msg_free(msg);
-        msg = NULL;
-    }
+    redis_okvm_async_context_execute(&okvm_thr->read_ctx, msg);
 }
 
-static void redis_okvm_thread_write_async_cb(uv_async_t *handle)
+static int redis_okvm_thread_can_pop_write_msg(struct redis_okvm_thread *okvm_thr)
 {
-    struct redis_okvm_thread *okvm_thr = (struct redis_okvm_thread*)handle->data;
-    struct redis_okvm_msg *msg = NULL;
-
-    if (!redis_okvm_async_context_ok(&okvm_thr->write_ctx)){
-        HIREDIS_OKVM_LOG_WARNING("The write async context isn't ok");
-        return;
-    }
-
-    while(1){
-        msg = redis_okvm_msg_queue_pop(&okvm_thr->write_queue); 
-        if (!msg){
-            break;
-        }
-        redis_okvm_async_context_execute(&okvm_thr->write_ctx, msg);
-        redis_okvm_msg_free(msg);
-        msg = NULL;
-    }
+    return redis_okvm_async_context_ok(&okvm_thr->write_ctx);
 }
+
+static void redis_okvm_thread_handle_write_msg(struct redis_okvm_thread *okvm_thr, struct redis_okvm_msg *msg)
+{
+    redis_okvm_async_context_execute(&okvm_thr->write_ctx, msg);
+}
+
 static void redis_okvm_thr_svc(void *arg)
 {
     uv_async_t *notify = NULL;
@@ -424,27 +428,19 @@ static void redis_okvm_thr_svc(void *arg)
         HIREDIS_OKVM_LOG_ERROR("Start worker thread failed");
         return;
     }
-    // Register inner message queue
-    notify = redis_okvm_msg_queue_get_notify(&okvm_thr->inner_queue);
-    notify->data = arg;
-    if (0 != uv_async_init(&okvm_thr->loop, notify, redis_okvm_thread_inner_async_cb)){
-        HIREDIS_OKVM_LOG_ERROR("Start worker thread. init inner async failed");
-        return;
-    }
-    // Register read message queue
-    notify = redis_okvm_msg_queue_get_notify(&okvm_thr->read_queue);
-    notify->data = arg;
-    if (0 != uv_async_init(&okvm_thr->loop, notify, redis_okvm_thread_read_async_cb)){
-        HIREDIS_OKVM_LOG_ERROR("Start worker thread. init read async failed");
-        return;
-    }
-    // Register write message queue
-    notify = redis_okvm_msg_queue_get_notify(&okvm_thr->write_queue);
-    notify->data = arg;
-    if (0 != uv_async_init(&okvm_thr->loop, notify, redis_okvm_thread_write_async_cb)){
-        HIREDIS_OKVM_LOG_ERROR("Start worker thread. init inner async failed");
-        return;
-    }
+
+    redis_okvm_msg_queue_init(&okvm_thr->inner_queue,
+            okvm_thr,
+            redis_okvm_thread_can_pop_inner_msg,
+            redis_okvm_thread_handle_inner_msg);
+    redis_okvm_msg_queue_init(&okvm_thr->read_queue,
+            okvm_thr,
+            redis_okvm_thread_can_pop_read_msg,
+            redis_okvm_thread_handle_read_msg);
+    redis_okvm_msg_queue_init(&okvm_thr->write_queue,
+            okvm_thr,
+            redis_okvm_thread_can_pop_write_msg,
+            redis_okvm_thread_handle_write_msg);
 
     uv_mutex_lock(&okvm_thr->state_mutex);
     okvm_thr->state = 1;
@@ -463,9 +459,6 @@ int redis_okvm_thread_init(struct redis_okvm_thread *okvm_thr)
     redis_okvm_async_context_init(&okvm_thr->read_ctx, okvm_thr);
     okvm_thr->role = 0;
 
-    redis_okvm_msg_queue_init(&okvm_thr->inner_queue);
-    redis_okvm_msg_queue_init(&okvm_thr->read_queue);
-    redis_okvm_msg_queue_init(&okvm_thr->write_queue);
     uv_mutex_init(&okvm_thr->state_mutex);
     uv_cond_init(&okvm_thr->state_cond);
     okvm_thr->state = 0;

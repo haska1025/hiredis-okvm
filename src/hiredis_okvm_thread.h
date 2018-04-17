@@ -49,14 +49,23 @@ void redis_okvm_msg_free(struct redis_okvm_msg *msg);
 void reids_okvm_msg_set_reply(struct redis_okvm_msg *msg, redisReply *reply);
 int redis_okvm_msg_get_reply(struct redis_okvm_msg *msg);
 
+struct redis_okvm_thread;
+
 struct redis_okvm_msg_queue
 {
+    struct redis_okvm_thread *okvm_thr;
+    int (*can_pop)(struct redis_okvm_thread *okvm_thr);
+    void (*handle_msg)(struct redis_okvm_thread *okvm_thr, struct redis_okvm_msg *msg);
     void *queue_head[2];
     uv_async_t notify;
     uv_mutex_t queue_mutex;
 };
 
-int redis_okvm_msg_queue_init(struct redis_okvm_msg_queue *queue);
+int redis_okvm_msg_queue_init(struct redis_okvm_msg_queue *queue,
+    struct redis_okvm_thread *okvm_thr,
+    int (*can_pop)(struct redis_okvm_thread *okvm_thr),
+    void (*handle_msg)(struct redis_okvm_thread *okvm_thr, struct redis_okvm_msg *msg));
+
 int redis_okvm_msg_queue_push(struct redis_okvm_msg_queue *queue, struct redis_okvm_msg *msg);
 struct redis_okvm_msg *redis_okvm_msg_queue_pop(struct redis_okvm_msg_queue *queue);
 static inline uv_async_t * redis_okvm_msg_queue_get_notify(struct redis_okvm_msg_queue *queue){return &queue->notify;}
@@ -74,7 +83,6 @@ enum
     OKVM_ESTABLISHED    // 8
 };
 
-struct redis_okvm_thread;
 struct redis_okvm_async_context
 {
     // The redis context which indicate the connection between the hiredis and the redis server.
