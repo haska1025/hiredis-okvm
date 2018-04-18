@@ -16,7 +16,6 @@ int redis_okvm_init(struct redis_okvm *param)
 {
     int rc = 0;
     int i = 0;
-    int conn_num = param->connections;
 
     if (!param){
         HIREDIS_OKVM_LOG_ERROR("Invalid param to init okvm");
@@ -29,6 +28,8 @@ int redis_okvm_init(struct redis_okvm *param)
 
     INIT_HIREDIS_OKVM(&g_okvm);
 
+    g_okvm.read_connections = param->read_connections;
+    g_okvm.write_connections = param->write_connections;
     g_okvm.db_index = param->db_index;
     g_okvm.redis_host = strdup(param->redis_host);
     if (param->db_name){
@@ -38,15 +39,8 @@ int redis_okvm_init(struct redis_okvm *param)
         g_okvm.password = strdup(param->password);
     }
 
-    if (conn_num < DEFAULT_CONN_NUM)
-        conn_num = DEFAULT_CONN_NUM;
-
-    if (conn_num > MAX_CONN_NUM)
-        conn_num = MAX_CONN_NUM;
-
-    g_okvm.connections = conn_num;
-
-    return hireids_okvm_mgr_init(&g_mgr, conn_num);
+    // Just create one thread
+    return redis_okvm_mgr_init(&g_mgr, 1);
 }
 int redis_okvm_fini()
 {
@@ -68,31 +62,48 @@ int redis_okvm_fini()
     return redis_okvm_mgr_fini(&g_mgr);
 }
 
-int redis_okvm_write(const char *cmd, int len)
+int redis_okvm_write(const char *cmd)
 {
-    struct redis_okvm_msg *msg = redis_okvm_msg_alloc(OKVM_EXTERNAL_CMD_WRITE, cmd, len); 
-    return redis_okvm_send_policy_send(&g_mgr.write_policy, msg);
+    redisReply *reply = NULL;
+    struct redis_okvm_context *ctx = NULL;
+
+    ctx = redis_okvm_pool_pop(&g_mgr.write_pool);
+    if (!ctx){
+        HIREDIS_OKVM_LOG_ERROR("Get context for write cmd(%s) failed!", cmd);
+        return REDIS_OKVM_ERROR;
+    }
+    reply = redis_okvm_context_execute(ctx, cmd);
+
+    redis_okvm_pool_push(&g_mgr.write_pool, ctx);
+
+    if (reply){
+        freeReplyObject(reply);
+        reply = NULL;
+        return REDIS_OKVM_OK;
+    }
+    return REDIS_OKVM_ERROR;
 }
 
-int redis_okvm_read(const char *cmd, int len, void (*reply_cb)(void *reply))
+void* redis_okvm_read(const char *cmd)
 {
-    int rc = 0;
-    int reply = NULL;
-    struct redis_okvm_msg *msg = redis_okvm_msg_alloc(OKVM_EXTERNAL_CMD_READ, cmd, len);
-    msg->reply_cb = reply_cb;
+    redisReply *reply = NULL;
+    struct redis_okvm_context *ctx = NULL;
 
-    rc = redis_okvm_send_policy_send(&g_mgr.read_policy, msg);
-    if (rc != 0){
-        redis_okvm_msg_free(msg);
-        msg = NULL;
-        return 0;
+    ctx = redis_okvm_pool_pop(&g_mgr.read_pool);
+    if (!ctx){
+        HIREDIS_OKVM_LOG_ERROR("Get context for read cmd(%s) failed!", cmd);
+        return NULL;
     }
 
-    reply = redis_okvm_msg_get_reply(msg);
-    redis_okvm_msg_free(msg);
-    msg = NULL;
+    reply = redis_okvm_context_execute(ctx, cmd);
+    redis_okvm_pool_push(&g_mgr.write_pool, ctx);
 
     return reply;
+}
+
+void redis_okvm_reply_free(void *reply)
+{
+    freeReplyObject(reply);
 }
 int redis_okvm_reply_length(void *reply)
 {
@@ -135,5 +146,4 @@ int redis_okvm_get_log_level()
 {
     return g_loglevel;
 }
-
 

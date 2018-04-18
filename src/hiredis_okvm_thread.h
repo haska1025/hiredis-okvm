@@ -6,20 +6,10 @@
 #include <async.h>
 #include "queue.h"
 
-#define LEADER 1
-#define FOLLOWER 2
-
 enum{
-    OKVM_INNER_CMD_STOP = 1,
-    // wirter to do
-    OKVM_INNER_CMD_CONNECT_SLAVE,
-    // Reader to do
-    OKVM_INNER_CMD_CONNECT_MASTER,
+    OKVM_CMD_STOP = 1,
     // Just leader to do
-    OKVM_INNER_CMD_CONNECT_SENTINEL,
-    // External message
-    OKVM_EXTERNAL_CMD_READ = 10001,
-    OKVM_EXTERNAL_CMD_WRITE,
+    OKVM_CMD_CONNECT_SENTINEL,
 };
 
 struct redis_okvm_host_info
@@ -35,11 +25,7 @@ struct redis_okvm_msg
     int type;
     int ref_count;
     void *link[2];
-    int reply;
-    void (*reply_cb)(void *reply);
 
-    uv_mutex_t msg_mutex;
-    uv_cond_t msg_cond;
     int data_len;
     char data[0];
 };
@@ -54,7 +40,6 @@ struct redis_okvm_thread;
 struct redis_okvm_msg_queue
 {
     struct redis_okvm_thread *okvm_thr;
-    int (*can_pop)(struct redis_okvm_thread *okvm_thr);
     void (*handle_msg)(struct redis_okvm_thread *okvm_thr, struct redis_okvm_msg *msg);
     void *queue_head[2];
     uv_async_t notify;
@@ -63,7 +48,6 @@ struct redis_okvm_msg_queue
 
 int redis_okvm_msg_queue_init(struct redis_okvm_msg_queue *queue,
     struct redis_okvm_thread *okvm_thr,
-    int (*can_pop)(struct redis_okvm_thread *okvm_thr),
     void (*handle_msg)(struct redis_okvm_thread *okvm_thr, struct redis_okvm_msg *msg));
 
 int redis_okvm_msg_queue_push(struct redis_okvm_msg_queue *queue, struct redis_okvm_msg *msg);
@@ -74,42 +58,27 @@ void redis_okvm_msg_queue_notify(struct redis_okvm_msg_queue *queue);
 enum
 {
     OKVM_CLOSED=1,      // 1
-    OKVM_CONNECTING,    // 2
-    OKVM_CONNECTED,     // 3
-    OKVM_AUTH,          // 4
-    OKVM_CHECK_AUTH,    // 5
-    OKVM_ROLE,          // 6
-    OKVM_CHECK_ROLE,    // 7
-    OKVM_ESTABLISHED    // 8
+    OKVM_CONNECTED,     // 2
 };
 
-struct redis_okvm_async_context
+struct redis_okvm_context
 {
     // The redis context which indicate the connection between the hiredis and the redis server.
-    redisAsyncContext *ctx;
+    redisContext *ctx;
     // The context status
     int state;
-    struct redis_okvm_thread *okvm_thr;
+    void *link[2];
 };
 
-int redis_okvm_async_context_init(struct redis_okvm_async_context *async_ctx, struct redis_okvm_thread *thr);
-int redis_okvm_async_context_fini(struct redis_okvm_async_context *async_ctx);
-int redis_okvm_async_context_connect(struct redis_okvm_async_context *async_ctx, char *ip, int port);
-int redis_okvm_async_context_execute(struct redis_okvm_async_context *async_ctx, struct redis_okvm_msg *msg);
-static inline int redis_okvm_async_context_ok(struct redis_okvm_async_context *async_ctx){return async_ctx->state == OKVM_ESTABLISHED;}
+int redis_okvm_context_init(struct redis_okvm_context *ctx);
+int redis_okvm_context_fini(struct redis_okvm_context *ctx);
+int redis_okvm_context_connect_server(struct redis_okvm_context *ctx, char *ip, int port);
+redisReply* redis_okvm_context_execute(struct redis_okvm_context *ctx, const char *cmd);
 
 struct redis_okvm_thread
 {
-    struct redis_okvm_async_context read_ctx;
-    struct redis_okvm_async_context write_ctx;
-    int role;
-
     // Used to talk with everyone about internal message.
     struct redis_okvm_msg_queue inner_queue;
-    // The write message queue
-    struct redis_okvm_msg_queue write_queue;
-    // The read message queue
-    struct redis_okvm_msg_queue read_queue;
 
     uv_loop_t loop;
     uv_thread_t worker;
@@ -123,26 +92,28 @@ int redis_okvm_thread_start(struct redis_okvm_thread *okvm_thr);
 int redis_okvm_thread_stop(struct redis_okvm_thread *okvm_thr);
 int redis_okvm_thread_push(struct redis_okvm_thread *okvm_thr, struct redis_okvm_msg *msg);
 
-struct redis_okvm_send_policy
+struct redis_okvm_pool
 {
-    struct redis_okvm_thread **threads;
-    int max_len;
-    int cur_idx;
+    int ctx_count;
+    void *ctx_head[2];
+
     uv_mutex_t mutex;
+    uv_cond_t cond;
 };
 
-int redis_okvm_send_policy_init(struct redis_okvm_send_policy *policy,
-        struct redis_okvm_thread **thr,
-        int len);
-int redis_okvm_send_policy_send(struct redis_okvm_send_policy *policy, struct redis_okvm_msg *msg);
-int redis_okvm_send_policy_fini(struct redis_okvm_send_policy *policy);
+int redis_okvm_pool_init(struct redis_okvm_pool *pool);
+int redis_okvm_pool_create(struct redis_okvm_pool *pool, struct redis_okvm_host_info *host, int conns);
+int redis_okvm_pool_push(struct redis_okvm_pool *pool, struct redis_okvm_context *ctx);
+struct redis_okvm_context *redis_okvm_pool_pop(struct redis_okvm_pool *pool);
+struct redis_okvm_context *redis_okvm_pool_timed_pop(struct redis_okvm_pool *pool, int timeout);
+int redis_okvm_pool_fini(struct redis_okvm_pool *pool);
 
 struct redis_okvm_mgr
 {
     int threads_nr;
     struct redis_okvm_thread **threads;
-    struct redis_okvm_send_policy read_policy;
-    struct redis_okvm_send_policy write_policy;
+    struct redis_okvm_pool read_pool;
+    struct redis_okvm_pool write_pool;
     // The next two member just used by leader
     // The slave host info used for read
     void *slaves_head[2];

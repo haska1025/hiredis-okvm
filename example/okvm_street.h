@@ -29,6 +29,14 @@ public:
 
     static void restore_reply_cb(void *userdata, void *reply)
     {
+    }
+
+    int restore()
+    {
+        // Get the member
+        std::ostringstream os;
+        os << "hgetall " << prefix_ << ":" << id_;
+        void *reply = redis_okvm_read(os.str().c_str(), os.str().size(), restore_reply_cb);
         int i = 0;
         int length = 0;
         char *field = NULL;
@@ -52,18 +60,8 @@ public:
                 ;//Do nothing.
             }
         }
-    }
-
-    void restore_signlights_rlt_reply_cb(void *userdata, void *reply)
-    {
-    }
-
-    int restore()
-    {
-        // Get the member
-        std::ostringstream os;
-        os << "hgetall " << prefix_ << ":" << id_;
-        redis_okvm_read(os.str().c_str(), os.str().size(), restore_reply_cb);
+        redis_okvm_reply_free(reply);
+        reply = NULL;
 
         // Get sub-mapping
         std::ostringstream os2;

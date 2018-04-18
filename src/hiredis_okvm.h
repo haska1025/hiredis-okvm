@@ -3,11 +3,14 @@
 
 #define REDIS_OKVM_OK 0
 #define REDIS_OKVM_ERROR -1
-#define REDIS_OKVM_WAIT_REPLY -2
+#define REDIS_OKVM_CONN_FAILED -2
+#define REDIS_OKVM_AUTH_FAILED -3
+#define REDIS_OKVM_ROLE_FAILED -4
 
 #define INIT_HIREDIS_OKVM(okvm) \
     do{\
-        (okvm)->connections = 1;\
+        (okvm)->read_connections = 1;\
+        (okvm)->write_connections = 1;\
         (okvm)->db_index = 0;\
         (okvm)->redis_host = NULL;\
         (okvm)->db_name = NULL;\
@@ -17,7 +20,8 @@
 struct redis_okvm
 {
     // The number of the connection between the hiredis and redis server.
-    int connections;
+    int read_connections;
+    int write_connections;
     int db_index;
     /**
      * The sentinel host for redis cluster.
@@ -33,8 +37,9 @@ struct redis_okvm
 extern int redis_okvm_init(struct redis_okvm *param);
 extern int redis_okvm_fini();
 
-extern int redis_okvm_write(const char *cmd, int len);
-extern int redis_okvm_read(const char *cmd, int len, void (*reply_cb)(void *reply));
+extern int redis_okvm_write(const char *cmd);
+extern void* redis_okvm_read(const char *cmd);
+extern void redis_okvm_reply_free(void *reply);
 
 extern int redis_okvm_reply_length(void *reply);
 // return int value for reply by index from array 

@@ -2,7 +2,7 @@ package okvm_tpp;
 
 protocol Signlight
 {
-    prefix key string prefix;
+    prefix key string prefix='signlight';
     primary key int id;
     foreign key int fid1;
     foreign key int fid2;
@@ -14,7 +14,7 @@ protocol Signlight
 
 protocol Street
 {
-    prefix key string prefix;
+    prefix key string prefix='street';
     primary key int id;
 
     int number;

@@ -21,7 +21,8 @@ void test_sentinel()
     mgr.master.ip = NULL;
     mgr.master.port = 0;
 
-    g_okvm.connections = 4;
+    g_okvm.read_connections = 4;
+    g_okvm.write_connections = 4;
     g_okvm.db_index = 2;
     g_okvm.redis_host = "192.168.32.84:26379;192.168.32.107:26379;192.168.32.104:26379";
     //g_okvm.redis_host = "127.0.0.1:26379;127.0.0.1:26380;127.0.0.1:26381";
@@ -65,17 +66,35 @@ void test_sentinel()
     HIREDIS_OKVM_LOG_INFO("Master ip(%s) port(%d)", mgr.master.ip, mgr.master.port);
 
     // clear
-    g_okvm.connections = 0;
+    g_okvm.read_connections = 0;
+    g_okvm.write_connections = 0;
     g_okvm.db_index = 0;
     g_okvm.redis_host = NULL;
     g_okvm.db_name =  NULL;
 }
-
-void getall_test1(void *reply)
+void test_cmd()
 {
+    char *msg = NULL;
+    char *msg2 = NULL;
+    char *msgget = NULL;
+    void *reply = NULL;
+
     int i = 0;
     int length = 0;
     char *field = NULL;
+
+    msg = "hset test:1 name zhangsan";
+    redis_okvm_write(msg);
+
+    msg2 = "hset test:1 age 35";
+    redis_okvm_write(msg2);
+
+    msgget = "hgetall test:1";
+    reply = redis_okvm_read(msgget);
+    if (!reply){
+        HIREDIS_OKVM_LOG_ERROR("cmd(%s) failed!", msgget);
+        return;
+    }
 
     length = redis_okvm_reply_length(reply);
     for (; i < length;){
@@ -89,21 +108,6 @@ void getall_test1(void *reply)
         }
     }
 }
-void test_cmd()
-{
-    char *msg = NULL;
-    char *msg2 = NULL;
-    char *msgget = NULL;
-
-    msg = "hset test:1 name zhangsan";
-    redis_okvm_write(msg, strlen(msg));
-
-    msg2 = "hset test:1 age 35";
-    redis_okvm_write(msg2, strlen(msg2));
-
-    msgget = "hgetall test:1";
-    redis_okvm_read(msgget, strlen(msgget), getall_test1);
-}
 
 int main( int argc, char ** argv)
 {
@@ -115,7 +119,8 @@ int main( int argc, char ** argv)
 
     INIT_HIREDIS_OKVM(&okvm);
 
-    okvm.connections = 1;
+    okvm.read_connections = 1;
+    okvm.write_connections = 1;
     okvm.db_index = 2;
     okvm.redis_host = "192.168.32.84:26379;192.168.32.107:26379;192.168.32.104:26379";
     //okvm.redis_host = "127.0.0.1:26379;127.0.0.1:26380;127.0.0.1:26381";
