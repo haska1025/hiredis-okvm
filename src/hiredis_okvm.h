@@ -38,7 +38,21 @@ extern int redis_okvm_init(struct redis_okvm *param);
 extern int redis_okvm_fini();
 
 extern int redis_okvm_write(const char *cmd);
+// Return the reply pointer 
 extern void* redis_okvm_read(const char *cmd);
+
+// Return the context pointer
+extern void *redis_okvm_bulk_write_begin();
+extern int redis_okvm_bulk_write(void *ctx, const char *cmd);
+extern void redis_okvm_bulk_write_end(void *ctx);
+
+// Return the context pointer
+extern void *redis_okvm_bulk_read_begin();
+extern int redis_okvm_bulk_read(void *ctx, const char *cmd);
+void *redis_okvm_bulk_read_reply(void *ctx);
+extern void redis_okvm_bulk_read_end(void *ctx);
+
+// Return the reply pointer 
 extern void redis_okvm_reply_free(void *reply);
 
 extern int redis_okvm_reply_length(void *reply);

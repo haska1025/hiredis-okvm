@@ -130,6 +130,7 @@ static redisContext *redis_okvm_context_connect(char *ip, int port, int timeout)
 int redis_okvm_context_init(struct redis_okvm_context *ctx)
 {
     ctx->ctx = NULL;
+    ctx->bulk_count = 0;
     QUEUE_INIT(&ctx->link);
     return REDIS_OKVM_OK;
 }
@@ -198,6 +199,7 @@ redisReply* redis_okvm_context_execute(struct redis_okvm_context *ctx, const cha
     HIREDIS_OKVM_LOG_INFO("ctx(%p) execute message(%s)", ctx, cmd);
     reply = redisCommand(ctx->ctx, cmd);
     if (!reply || reply->type == REDIS_REPLY_ERROR){
+        // We must disconnect. Read to reconnect.
         HIREDIS_OKVM_LOG_ERROR("redisCommand excuete cmd(%s) failed.", cmd);
         if (reply) freeReplyObject(reply);
         return NULL;
@@ -205,6 +207,37 @@ redisReply* redis_okvm_context_execute(struct redis_okvm_context *ctx, const cha
     return reply;
 }
 
+void* redis_okvm_context_get_reply(struct redis_okvm_context *ctx)
+{
+    void *reply = NULL;
+
+    if (ctx->bulk_count <= 0){
+        ctx->bulk_count = 0;
+        return NULL;
+    }
+
+    if (redisGetReply(ctx->ctx, &reply) != REDIS_OK){
+        // We must disconnect. Read to reconnect.
+        ctx->bulk_count = 0;
+        return NULL;
+    }
+
+    ctx->bulk_count--;
+    return reply;
+}
+int redis_okvm_context_append(struct redis_okvm_context *ctx, const char *cmd)
+{
+    int rc = REDIS_OK;
+
+    rc = redisAppendCommand(ctx->ctx, cmd);
+    if (rc == REDIS_OK){
+        ctx->bulk_count++;
+        rc = REDIS_OKVM_OK;
+    }else{
+        // We must disconnect. Read to reconnect.
+    }
+    return REDIS_OKVM_ERROR;
+}
 /******************************* The okvm thread *********************/
 static void redis_okvm_thread_handle_inner_msg(struct redis_okvm_thread *okvm_thr, struct redis_okvm_msg *msg)
 {
@@ -356,7 +389,7 @@ struct redis_okvm_context *redis_okvm_pool_timed_pop(struct redis_okvm_pool *poo
             break;
     }
 
-    if (rc != 0){
+    if (rc == 0){
         ptr = QUEUE_HEAD(&pool->ctx_head);
         ctx = QUEUE_DATA(ptr, struct redis_okvm_context, link);
         QUEUE_REMOVE(ptr);

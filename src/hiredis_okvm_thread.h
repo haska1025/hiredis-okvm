@@ -65,6 +65,7 @@ struct redis_okvm_context
 {
     // The redis context which indicate the connection between the hiredis and the redis server.
     redisContext *ctx;
+    int bulk_count;
     // The context status
     int state;
     void *link[2];
@@ -74,6 +75,8 @@ int redis_okvm_context_init(struct redis_okvm_context *ctx);
 int redis_okvm_context_fini(struct redis_okvm_context *ctx);
 int redis_okvm_context_connect_server(struct redis_okvm_context *ctx, char *ip, int port);
 redisReply* redis_okvm_context_execute(struct redis_okvm_context *ctx, const char *cmd);
+void* redis_okvm_context_get_reply(struct redis_okvm_context *ctx);
+int redis_okvm_context_append(struct redis_okvm_context *ctx, const char *cmd);
 
 struct redis_okvm_thread
 {

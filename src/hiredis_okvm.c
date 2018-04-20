@@ -4,9 +4,6 @@
 #include "hiredis_okvm_thread.h"
 #include "hiredis_okvm_log.h"
 
-#define DEFAULT_CONN_NUM 1
-#define MAX_CONN_NUM 64
-
 // The global variable
 struct redis_okvm g_okvm;
 struct redis_okvm_mgr g_mgr;
@@ -15,7 +12,6 @@ int g_loglevel = LOG_INFO;
 int redis_okvm_init(struct redis_okvm *param)
 {
     int rc = 0;
-    int i = 0;
 
     if (!param){
         HIREDIS_OKVM_LOG_ERROR("Invalid param to init okvm");
@@ -44,8 +40,6 @@ int redis_okvm_init(struct redis_okvm *param)
 }
 int redis_okvm_fini()
 {
-    int i = 0;
-
     if (g_okvm.redis_host){
         free(g_okvm.redis_host);
         g_okvm.redis_host = NULL;
@@ -99,6 +93,50 @@ void* redis_okvm_read(const char *cmd)
     redis_okvm_pool_push(&g_mgr.write_pool, ctx);
 
     return reply;
+}
+void *redis_okvm_bulk_write_begin()
+{
+    // Borrow a context from write pool
+    return redis_okvm_pool_pop(&g_mgr.write_pool);
+}
+int redis_okvm_bulk_write(void *ctx, const char *cmd)
+{
+    return redis_okvm_context_append(ctx, cmd);
+}
+void redis_okvm_bulk_write_end(void *ctx)
+{
+    void *reply = NULL;
+    // Repay the context to write pool
+    redis_okvm_pool_push(&g_mgr.write_pool, ctx);
+    do{
+        reply = redis_okvm_context_get_reply(ctx);
+        freeReplyObject(reply);
+    } while (reply);
+}
+
+void *redis_okvm_bulk_read_begin()
+{
+    // Borrow a context from read pool
+    return redis_okvm_pool_pop(&g_mgr.read_pool);
+}
+int redis_okvm_bulk_read(void *ctx, const char *cmd)
+{
+    return redis_okvm_context_append(ctx, cmd);
+}
+void redis_okvm_bulk_read_end(void *ctx)
+{
+    void *reply = NULL;
+    // Repay the context to read pool
+    redis_okvm_pool_push(&g_mgr.read_pool, ctx);
+    do{
+        reply = redis_okvm_context_get_reply(ctx);
+        freeReplyObject(reply);
+    } while (reply);
+}
+
+void *redis_okvm_bulk_read_reply(void *ctx)
+{
+    return redis_okvm_context_get_reply(ctx);
 }
 
 void redis_okvm_reply_free(void *reply)

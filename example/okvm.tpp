@@ -21,8 +21,8 @@ protocol Street
     string name;
     int direction;
     
+    repeat string person;
     // sub-mapping
-    set Signlight lights;
-    set prefix key string signlights_rlt;
-    set key int id;
+    repeat Signlight lights;
+    Signlight light;
 };

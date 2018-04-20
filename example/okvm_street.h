@@ -27,16 +27,12 @@ public:
     Street(){}
     ~Street(){}
 
-    static void restore_reply_cb(void *userdata, void *reply)
-    {
-    }
-
     int restore()
     {
         // Get the member
         std::ostringstream os;
         os << "hgetall " << prefix_ << ":" << id_;
-        void *reply = redis_okvm_read(os.str().c_str(), os.str().size(), restore_reply_cb);
+        void *reply = redis_okvm_read(os.str().c_str());
         int i = 0;
         int length = 0;
         char *field = NULL;

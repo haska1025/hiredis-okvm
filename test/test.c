@@ -109,6 +109,67 @@ void test_cmd()
     }
 }
 
+void test_bulk_cmd()
+{
+    void *ctx = NULL;
+    void *reply = NULL;
+    int i = 0;
+    int length = 0;
+    char *field = NULL;
+
+    ctx = redis_okvm_bulk_write_begin();
+    if (!ctx){
+        HIREDIS_OKVM_LOG_ERROR("Catn't get bulk write ctx");
+        return;
+    }
+    redis_okvm_bulk_write(ctx, "hmset street:2 name kejierlu number 124 direction east-west");
+    redis_okvm_bulk_write(ctx, "sadd street:2:person zhangsan2 lisi2 wangwu2");
+    redis_okvm_bulk_write(ctx, "sadd street:2:signlight 1 2 3");
+    redis_okvm_bulk_write_end(ctx);
+
+    ctx = redis_okvm_bulk_read_begin();
+    if (!ctx){
+        HIREDIS_OKVM_LOG_ERROR("Can't get bulk read ctx");
+        return;
+    }
+
+    redis_okvm_bulk_read(ctx, "hgetall street:2");
+    redis_okvm_bulk_read(ctx, "smembers street:2:person");
+    redis_okvm_bulk_read(ctx, "smembers street:2:signlight");
+
+    reply = redis_okvm_bulk_read_reply(ctx);
+    length = redis_okvm_reply_length(reply);
+    for (i = 0; i < length;){
+        field = redis_okvm_reply_idxof_str(reply, i++);
+        if (strcmp(field, "name") == 0){
+            HIREDIS_OKVM_LOG_INFO("street:2 name = %s", redis_okvm_reply_idxof_str(reply, i++));
+        }else if (strcmp(field, "number") == 0){
+            HIREDIS_OKVM_LOG_INFO("street:2 number = %s", redis_okvm_reply_idxof_str(reply, i++));
+        }else if (strcmp(field, "direction") == 0){
+            HIREDIS_OKVM_LOG_INFO("street:2 direction = %s", redis_okvm_reply_idxof_str(reply, i++));
+        }else{
+            i++;
+        }
+    }
+    redis_okvm_reply_free(reply);
+
+    reply = redis_okvm_bulk_read_reply(ctx);
+    length = redis_okvm_reply_length(reply);
+    for (i = 0; i < length;i++){
+        HIREDIS_OKVM_LOG_INFO("street:2:person(%s)", redis_okvm_reply_idxof_str(reply, i));
+    }
+    redis_okvm_reply_free(reply);
+
+    reply = redis_okvm_bulk_read_reply(ctx);
+    length = redis_okvm_reply_length(reply);
+    for (i = 0; i < length;i++){
+        HIREDIS_OKVM_LOG_INFO("street:2:signlight (%s)", redis_okvm_reply_idxof_str(reply, i));
+    }
+    redis_okvm_reply_free(reply);
+
+    redis_okvm_bulk_read_end(ctx);
+}
+
 int main( int argc, char ** argv)
 {
     char *host = NULL; 
@@ -136,6 +197,7 @@ int main( int argc, char ** argv)
     }
 
     test_cmd();
+    test_bulk_cmd();
 
     sleep(1);
     redis_okvm_fini();
