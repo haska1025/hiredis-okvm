@@ -34,7 +34,7 @@ PKG_CHECK_MODULES([HIREDIS],[hiredis])
 AC_CHECK_HEADERS([syslog.h])
 dnl Final Output
 AC_OUTPUT([
-Makefile src/Makefile test/Makefile
+Makefile src/Makefile test/Makefile example/Makefile
 src/hiredis_okvm.pc
 ])
 

@@ -3,7 +3,17 @@
 
 #include <syslog.h>
 
+#ifdef __cplusplus
+extern "C"{
+#endif
+
 extern int redis_okvm_get_log_level();
+extern void redis_okvm_set_log_level(int l);
+
+#ifdef __cplusplus
+}
+#endif
+
 
 #define HIREDIS_OKVM_LOG(level,fmt, ...) if (redis_okvm_get_log_level() >= level) syslog(LOG_LOCAL3|level, "%s:%d:(%s): "fmt , __FILE__,__LINE__,__FUNCTION__, ##__VA_ARGS__);
 

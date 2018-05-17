@@ -1,6 +1,10 @@
 #ifndef _HIREDIS_OKVM_H_
 #define _HIREDIS_OKVM_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define REDIS_OKVM_OK 0
 #define REDIS_OKVM_ERROR -1
 #define REDIS_OKVM_CONN_FAILED -2
@@ -67,7 +71,9 @@ extern int redis_okvm_reply_int(void *reply);
 // return string value for reply directly
 extern char* redis_okvm_reply_str(void *reply);
 
-extern void redis_okvm_set_log_level(int l);
+#ifdef __cplusplus
+}
+#endif
 
 #endif//_HIREDIS_OKVM_H_
 
